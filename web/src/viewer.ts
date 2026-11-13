@@ -3,17 +3,21 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { buildScene } from './build';
+import { Measure } from './measure';
+import { WalkControls, type Blocker } from './walk';
 import type { Scene, Selection } from './types';
 
 /** Grundriss (x, y, z-oben) -> three.js (x, y-oben, z). Siehe auch build.ts. */
 export const planToThree = (x: number, y: number, z = 0) => new THREE.Vector3(x, z, -y);
 export const threeToPlan = (v: THREE.Vector3): [number, number, number] => [v.x, -v.z, v.y];
 
-type ViewMode = 'orbit' | 'top';
+export type ViewMode = 'orbit' | 'top' | 'walk';
+export type Tool = 'select' | 'measure';
 
 export interface ViewerEvents {
   onSelect: (sel: Selection) => void;
   onObjectMoved: (id: string, position: [number, number, number], rotation: number) => void;
+  onMeasured?: (meters: number) => void;
 }
 
 export class Viewer {
@@ -30,6 +34,15 @@ export class Viewer {
   private mode: ViewMode = 'orbit';
   private pointerDown: { x: number; y: number } | null = null;
   private resizeObserver: ResizeObserver;
+  readonly measure: Measure;
+  readonly walk: WalkControls;
+  private tool: Tool = 'select';
+  private shift = { x: 0, y: 0 };
+  /** > 1: Kamera beim Einpassen weiter weg (Startseite am Handy). */
+  zoomOut = 1;
+  private clock = new THREE.Clock();
+  private anims: { node: THREE.Object3D; y: number; t: number }[] = [];
+  private fades: { mats: THREE.MeshStandardMaterial[]; from: THREE.Color[]; to: THREE.Color; t: number; ms: number }[] = [];
 
   constructor(private container: HTMLElement, private events: ViewerEvents) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -70,8 +83,14 @@ export class Viewer {
       this.controls.enabled = !(e as unknown as { value: boolean }).value;
       if (!(e as unknown as { value: boolean }).value) this.commitTransform();
     });
-    this.gizmo.addEventListener('objectChange', () => this.selectionBox?.update());
+    this.gizmo.addEventListener('objectChange', () => {
+      this.selectionBox?.update();
+      this.measure.updateSelection();
+    });
     this.scene.add(this.gizmo.getHelper());
+
+    this.measure = new Measure(container, this.scene);
+    this.walk = new WalkControls(this.camera, this.renderer.domElement, container);
 
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => (this.pointerDown = { x: e.clientX, y: e.clientY }));
@@ -79,7 +98,17 @@ export class Viewer {
       if (!this.pointerDown) return;
       const moved = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y);
       this.pointerDown = null;
-      if (moved < 5 && !this.gizmo.dragging) this.pick(e);
+      if (moved >= 5 || this.gizmo.dragging) return;
+      if (this.tool === 'measure') {
+        const p = this.surfacePoint(e);
+        if (p) {
+          const d = this.measure.addPoint(p);
+          if (d !== null) this.events.onMeasured?.(d);
+        }
+      } else this.pick(e);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (this.tool === 'measure' && this.measure.measuring && e.pointerType !== 'touch') this.measure.preview(this.surfacePoint(e));
     });
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -116,30 +145,125 @@ export class Viewer {
     });
     this.scene.add(this.root);
     this.sceneData = data;
+    this.measure.setRoom(data);
+    this.walk.setScene(data, this.blockers());
     if (!keepCamera) this.frame();
     this.setSelection(prevSel && this.nodeFor(prevSel) ? prevSel : null, false);
   }
 
   /** Kamera so setzen, dass der ganze Raum sichtbar ist. */
   frame(): void {
-    if (!this.sceneData) return;
+    if (!this.sceneData || this.mode === 'walk') return;
     const { center, size } = this.roomBounds();
     const h = this.sceneData.room.height;
     this.controls.target.copy(planToThree(center.x, center.y, h * 0.35));
     if (this.mode === 'top') {
       this.camera.position.copy(planToThree(center.x, center.y - 0.01, Math.max(size.x, size.y) * 1.6 + h));
     } else {
-      const d = Math.max(size.x, size.y) * 1.25 + 2;
+      // Hochformat (Handy): weiter weg, damit der Raum in die Breite passt
+      const d = (Math.max(size.x, size.y) * 1.25 + 2) * Math.max(1, 0.85 / this.camera.aspect) * this.zoomOut;
       this.camera.position.copy(planToThree(center.x + d * 0.55, center.y - d * 0.8, h + d * 0.55));
     }
     this.controls.update();
   }
 
+  get viewMode(): ViewMode {
+    return this.mode;
+  }
+
   setMode(mode: ViewMode): void {
+    const wasWalk = this.mode === 'walk';
     this.mode = mode;
+    if (mode === 'walk') {
+      if (!this.sceneData) return;
+      this.gizmo.detach();
+      this.controls.enabled = false;
+      this.controls.autoRotate = false;
+      this.walk.enable(this.sceneData, this.blockers());
+      return;
+    }
+    if (wasWalk) {
+      this.walk.disable();
+      this.controls.enabled = true;
+      if (this.selection?.kind === 'object') this.setSelection(this.selection, false);
+    }
     this.controls.maxPolarAngle = mode === 'top' ? 0.01 : Math.PI * 0.49;
     this.controls.minPolarAngle = 0;
     this.frame();
+  }
+
+  /** Bildmitte verschieben (Pixel), z. B. damit ein offenes Menü den Raum nicht verdeckt. */
+  setViewShift(x: number, y: number): void {
+    if (Math.abs(x - this.shift.x) < 1 && Math.abs(y - this.shift.y) < 1) return;
+    this.shift = { x, y };
+    this.resize();
+  }
+
+  setTool(tool: Tool): void {
+    this.tool = tool;
+    this.measure.cancelPending();
+    this.renderer.domElement.style.cursor = tool === 'measure' ? 'crosshair' : '';
+    if (tool === 'measure') this.setSelection(null, true);
+  }
+
+  /** Grundriss-Rechtecke der Möbel, an denen man beim Begehen nicht vorbeikommt. */
+  private blockers(): Blocker[] {
+    const out: Blocker[] = [];
+    for (const o of this.sceneData?.objects ?? []) {
+      if (o.size[2] < 0.25 || o.position[2] > 1.2) continue; // Teppiche und Hängendes
+      const node = this.nodes.get(o.id);
+      if (!node) continue;
+      const b = new THREE.Box3().setFromObject(node);
+      if (b.isEmpty()) continue;
+      out.push({ minX: b.min.x, maxX: b.max.x, minY: -b.max.z, maxY: -b.min.z });
+    }
+    return out;
+  }
+
+  /** Punkt auf einer sichtbaren Fläche unter dem Mauszeiger (für das Messen). */
+  private surfacePoint(e: PointerEvent): THREE.Vector3 | null {
+    if (!this.root) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.intersectObject(this.root, true).find((h) => isVisible(h.object));
+    return hit ? hit.point.clone() : null;
+  }
+
+  // ------------------------------------------------------------------ Animationen (Startseite)
+
+  /** Möbel fällt sanft von oben an seinen Platz. */
+  animateIn(id: string): void {
+    const node = this.nodes.get(id);
+    if (!node) return;
+    this.anims.push({ node, y: node.position.y, t: 0 });
+    node.position.y += 1.2;
+    node.scale.setScalar(0.6);
+  }
+
+  /** Farbe weich überblenden (Materialname <key>_main). */
+  fadeColor(key: string, hex: string, ms = 700): void {
+    const mats: THREE.MeshStandardMaterial[] = [];
+    this.root?.traverse((o) => {
+      for (const m of materials(o as THREE.Mesh)) if (m.name === `${key}_main`) mats.push(m as THREE.MeshStandardMaterial);
+    });
+    if (mats.length) this.fades.push({ mats, from: mats.map((m) => m.color.clone()), to: new THREE.Color(hex), t: 0, ms });
+  }
+
+  private runAnimations(dt: number): void {
+    this.anims = this.anims.filter((a) => {
+      a.t = Math.min(1, a.t + dt / 0.55);
+      const e = 1 - Math.pow(1 - a.t, 3);
+      a.node.position.y = a.y + (1 - e) * 1.2;
+      a.node.scale.setScalar(0.6 + 0.4 * e);
+      return a.t < 1;
+    });
+    this.fades = this.fades.filter((f) => {
+      f.t = Math.min(1, f.t + (dt * 1000) / f.ms);
+      f.mats.forEach((m, i) => m.color.copy(f.from[i]).lerp(f.to, f.t));
+      return f.t < 1;
+    });
   }
 
   private roomBounds() {
@@ -185,7 +309,9 @@ export class Viewer {
       this.selectionBox = new THREE.BoxHelper(node, '#e0457b');
       this.scene.add(this.selectionBox);
     }
-    if (node && sel?.kind === 'object') this.gizmo.attach(node);
+    if (node && sel?.kind === 'object' && this.mode !== 'walk') this.gizmo.attach(node);
+    const obj = sel?.kind === 'object' ? this.sceneData?.objects.find((o) => o.id === sel.id) : undefined;
+    this.measure.setSelection(obj && node ? node : null, obj?.size);
     if (notify) this.events.onSelect(sel);
   }
 
@@ -212,6 +338,8 @@ export class Viewer {
     const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
     this.events.onObjectMoved(sel.id, threeToPlan(node.position), Math.round(rot * 10) / 10);
     this.selectionBox?.update();
+    this.measure.updateSelection();
+    if (this.sceneData) this.walk.setScene(this.sceneData, this.blockers());
   }
 
   // ------------------------------------------------------------------ Änderungen ohne Neubau
@@ -235,6 +363,7 @@ export class Viewer {
 
   updateData(data: Scene): void {
     this.sceneData = data;
+    this.walk.setScene(data, this.blockers());
   }
 
   screenshot(): string {
@@ -245,9 +374,13 @@ export class Viewer {
   // ------------------------------------------------------------------ Schleife
 
   private tick(): void {
-    this.controls.update();
+    const dt = Math.min(0.1, this.clock.getDelta());
+    if (this.mode === 'walk') this.walk.update(dt);
+    else this.controls.update();
+    this.runAnimations(dt);
     this.updateWallVisibility();
     this.renderer.render(this.scene, this.camera);
+    this.measure.render(this.scene, this.camera);
   }
 
   /** Wände zwischen Kamera und Raum ausblenden (Puppenhaus-Ansicht). */
@@ -281,7 +414,10 @@ export class Viewer {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
     this.renderer.setSize(w, h, false);
+    this.measure?.setSize(w, h);
     this.camera.aspect = w / h;
+    if (this.shift.x || this.shift.y) this.camera.setViewOffset(w, h, -this.shift.x, this.shift.y, w, h);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
   }
 

@@ -4,6 +4,7 @@
  *
  *   GET  api/health                   Ist die KI eingerichtet, darf der Nutzer Räume anlegen?
  *   GET  api/catalog                  Möbelkategorien, Paneele, Bodenarten
+ *   GET  api/demo-scene               Beispielraum (Hintergrund der Startseite)
  *   POST api/projects                 Neues Projekt (Bilder aus dem Browser oder Demo-Raum)
  *   POST api/projects/<id>/analyze    KI-Analyse ausführen (dauert etwa eine Minute)
  *   GET  api/projects/<id>            Stand und Szene
@@ -28,6 +29,7 @@ class DM3D_Rest
 
         register_rest_route(self::NS, '/api/health', ['methods' => 'GET', 'callback' => [self::class, 'health'], 'permission_callback' => $public]);
         register_rest_route(self::NS, '/api/catalog', ['methods' => 'GET', 'callback' => [self::class, 'catalog'], 'permission_callback' => $public]);
+        register_rest_route(self::NS, '/api/demo-scene', ['methods' => 'GET', 'callback' => [self::class, 'demo_scene'], 'permission_callback' => $public]);
         register_rest_route(self::NS, '/api/projects', ['methods' => 'POST', 'callback' => [self::class, 'create'], 'permission_callback' => $creator]);
         register_rest_route(self::NS, "/api/projects/$id", ['methods' => 'GET', 'callback' => [self::class, 'get'], 'permission_callback' => $public]);
         register_rest_route(self::NS, "/api/projects/$id/analyze", ['methods' => 'POST', 'callback' => [self::class, 'analyze'], 'permission_callback' => $creator]);
@@ -58,6 +60,11 @@ class DM3D_Rest
     public static function catalog()
     {
         return json_decode((string) file_get_contents(DM3D_DIR . 'data/catalog.json'), true);
+    }
+
+    public static function demo_scene()
+    {
+        return json_decode((string) file_get_contents(DM3D_DIR . 'data/demo-scene.json'), true);
     }
 
     public static function create(WP_REST_Request $req)

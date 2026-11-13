@@ -2,8 +2,8 @@
 
 Aus einem Video, Fotos oder einem Grundriss wird per KI ein editierbarer 3D-Raum.
 Im Browser kann man sich im Raum umsehen, Möbel verschieben, drehen, löschen und hinzufügen,
-Wände und Möbel umfärben, Wandpaneele, Fenster und Türen setzen, den Raum leeren und echte
-Maße eintragen. Alles läuft als ein WordPress-Plugin, ein eigener Server ist nicht nötig.
+Wände und Möbel umfärben, Stile anwenden, Wandpaneele, Fenster und Türen setzen, den Raum leeren,
+echte Maße eintragen, Abstände messen und den Raum in der Ich-Perspektive begehen. Alles läuft als ein WordPress-Plugin, ein eigener Server ist nicht nötig.
 
 ## Aufbau
 
@@ -22,6 +22,10 @@ Browser (WordPress-Seite mit Shortcode)            WordPress (Plugin)           
     Lamellen-/Kassettenpaneele, parametrische Möbel). Jede Änderung ist sofort sichtbar.
   - `src/analysis.ts` schneidet Einzelbilder aus dem Video (Canvas), verkleinert Fotos und
     wandelt die KI-Antwort in eine Szene um.
+  - `src/app.ts` Oberfläche mit der Menüleiste unten (Ansicht, Raum, Auswahl, Entfernen, Farbe, Möbel, Style).
+  - `src/measure.ts` Raummaße, Möbelmaße und Wandabstände, freies Messen.
+  - `src/walk.ts` Begehen (W/A/S/D bzw. Joystick am Handy, mit Kollision an Wänden und Möbeln).
+  - `src/showcase.ts` animierter Beispielraum als Hintergrund der Startseite.
   - `src/types.ts` ist das Szenenformat.
 - **`wordpress-plugin/diy-mamis-3d/`**: das Plugin.
   - `includes/rest.php` REST-Schnittstelle, `includes/store.php` Ablage der Projekte,

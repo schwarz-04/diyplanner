@@ -36,6 +36,10 @@ export class Api {
     return this.request<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
 
+  demoScene() {
+    return this.request<Scene>('/api/demo-scene');
+  }
+
   health() {
     return this.request<{ ok: boolean; analysis_available: boolean; can_create: boolean; login_url?: string }>('/api/health');
   }
