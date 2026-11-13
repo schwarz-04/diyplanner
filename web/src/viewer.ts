@@ -92,7 +92,7 @@ export class Viewer {
   // ------------------------------------------------------------------ Laden
 
   async load(url: string, data: Scene, keepCamera: boolean): Promise<void> {
-    const gltf = await this.loader.loadAsync(url);
+    const gltf = await this.loader.parseAsync(await fetchModel(url), '');
     const prevSel = this.selection;
     this.gizmo.detach();
     if (this.root) {
@@ -244,7 +244,7 @@ export class Viewer {
 
   /** Lädt Möbel-Vorlagen (ein Objekt je Kategorie in Standardgröße), aus denen neue Möbel geklont werden. */
   async loadLibrary(url: string, sizes: Record<string, [number, number, number]>): Promise<void> {
-    const gltf = await this.loader.loadAsync(url);
+    const gltf = await this.loader.parseAsync(await fetchModel(url), '');
     gltf.scene.traverse((o) => {
       const d = o.userData;
       if (d?.dm_type === 'object' && d.dm_category && !this.templates.has(d.dm_category)) {
@@ -404,6 +404,47 @@ function toSelection(d: Record<string, any>): Selection {
     default:
       return null;
   }
+}
+
+/**
+ * Lädt ein Modell als .glb. Eingebettetes glTF (JSON mit data:-Puffern) wird im Speicher in ein
+ * GLB umgebaut, weil manche Hosts (z. B. Artifacts) fetch() auf data:-Adressen per CSP sperren.
+ */
+async function fetchModel(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Modell konnte nicht geladen werden (${res.status})`);
+  const buf = await res.arrayBuffer();
+  if (new Uint8Array(buf, 0, 1)[0] !== 0x7b) return buf; // kein JSON -> schon GLB
+  const json = JSON.parse(new TextDecoder().decode(buf));
+  let bin = new Uint8Array(0);
+  const uri: string | undefined = json.buffers?.[0]?.uri;
+  if (uri?.startsWith('data:')) {
+    const raw = atob(uri.slice(uri.indexOf(',') + 1));
+    bin = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bin[i] = raw.charCodeAt(i);
+    delete json.buffers[0].uri;
+  }
+  const pad = (n: number) => (4 - (n % 4)) % 4;
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+  const jp = pad(jsonBytes.length);
+  const bp = pad(bin.length);
+  const total = 12 + 8 + jsonBytes.length + jp + (bin.length ? 8 + bin.length + bp : 0);
+  const out = new Uint8Array(total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, 0x46546c67, true); // 'glTF'
+  dv.setUint32(4, 2, true);
+  dv.setUint32(8, total, true);
+  dv.setUint32(12, jsonBytes.length + jp, true);
+  dv.setUint32(16, 0x4e4f534a, true); // JSON
+  out.set(jsonBytes, 20);
+  out.fill(0x20, 20 + jsonBytes.length, 20 + jsonBytes.length + jp);
+  if (bin.length) {
+    const o = 20 + jsonBytes.length + jp;
+    dv.setUint32(o, bin.length + bp, true);
+    dv.setUint32(o + 4, 0x004e4942, true); // BIN
+    out.set(bin, o + 8);
+  }
+  return out.buffer;
 }
 
 function cloneMat(m: THREE.Material, tplKey: string, id: string): THREE.Material {
