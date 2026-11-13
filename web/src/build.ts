@@ -197,6 +197,7 @@ function walls(scene: Scene, root: THREE.Group, sh: Shared): void {
       g.box(o0, o0 + f, -t, 0, sill, top);
       g.box(o1 - f, o1, -t, 0, sill, top);
       g.box(o0, o1, -t, 0, top - f, top);
+      if (op.type === 'door') g.box(o0, o1, -t, 0, 0, 0.012); // Schwelle, schließt die Lücke zum Nachbarraum
       if (op.type === 'window') {
         g.box(o0, o1, -t, 0, sill, sill + f);
         g.box((o0 + o1) / 2 - f / 2, (o0 + o1) / 2 + f / 2, -t * 0.6, -t * 0.4, sill, top);

@@ -8,7 +8,7 @@
  *   POST api/projects                 Neues Projekt (Bilder aus dem Browser oder Demo-Raum)
  *   POST api/projects/<id>/analyze    KI-Analyse ausführen (dauert etwa eine Minute)
  *   GET  api/projects/<id>            Stand und Szene
- *   PUT  api/projects/<id>/scene      Szene speichern
+ *   PUT  api/projects/<id>/scene      Szene speichern (ein Raum oder Wohnung mit rooms[])
  */
 
 if (!defined('ABSPATH')) {
@@ -147,6 +147,12 @@ class DM3D_Rest
         return DM3D_Store::payload($id);
     }
 
+    private static function valid_room($s): bool
+    {
+        return is_array($s) && isset($s['room']['polygon']) && is_array($s['room']['polygon'])
+            && count($s['room']['polygon']) >= 3 && isset($s['walls'], $s['objects']);
+    }
+
     public static function save_scene(WP_REST_Request $req)
     {
         $id = $req['id'];
@@ -158,9 +164,17 @@ class DM3D_Rest
             return self::error('Die Szene ist zu groß.', 413);
         }
         $scene = $req->get_json_params();
-        if (!is_array($scene) || !isset($scene['room']['polygon']) || !is_array($scene['room']['polygon'])
-            || count($scene['room']['polygon']) < 3 || !isset($scene['walls'], $scene['objects'])) {
+        // Version 1: ein Raum; Version 2: Wohnung mit mehreren Räumen (rooms[].scene)
+        $rooms = is_array($scene) && isset($scene['rooms']) && is_array($scene['rooms'])
+            ? array_map(function ($r) { return is_array($r) ? ($r['scene'] ?? null) : null; }, $scene['rooms'])
+            : [$scene];
+        if (!$rooms || count($rooms) > 30) {
             return self::error('Ungültige Szene.', 400);
+        }
+        foreach ($rooms as $room) {
+            if (!self::valid_room($room)) {
+                return self::error('Ungültige Szene.', 400);
+            }
         }
         DM3D_Store::write($dir, 'scene.json', $scene);
         $status = DM3D_Store::status($dir);

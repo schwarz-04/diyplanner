@@ -3,7 +3,8 @@
 Aus einem Video, Fotos oder einem Grundriss wird per KI ein editierbarer 3D-Raum.
 Im Browser kann man sich im Raum umsehen, Möbel verschieben, drehen, löschen und hinzufügen,
 Wände und Möbel umfärben, Stile anwenden, Wandpaneele, Fenster und Türen setzen, den Raum leeren,
-echte Maße eintragen, Abstände messen und den Raum in der Ich-Perspektive begehen. Alles läuft als ein WordPress-Plugin, ein eigener Server ist nicht nötig.
+echte Maße eintragen, Abstände messen, weitere Räume anbauen (leer oder aus einem eigenen Video)
+und die Wohnung in der Ich-Perspektive durch die Türen begehen. Alles läuft als ein WordPress-Plugin, ein eigener Server ist nicht nötig.
 
 ## Aufbau
 
@@ -26,7 +27,9 @@ Browser (WordPress-Seite mit Shortcode)            WordPress (Plugin)           
   - `src/measure.ts` Raummaße, Möbelmaße und Wandabstände, freies Messen.
   - `src/walk.ts` Begehen (W/A/S/D bzw. Joystick am Handy, mit Kollision an Wänden und Möbeln).
   - `src/showcase.ts` animierter Beispielraum als Hintergrund der Startseite.
-  - `src/types.ts` ist das Szenenformat.
+  - `src/home.ts` Wohnung aus mehreren Räumen: Räume anbauen (mit Tür in beiden Wänden), Grundriss zum Begehen.
+  - `src/types.ts` ist das Szenenformat. Version 1 ist ein Raum, Version 2 eine Wohnung
+    (`rooms[]` mit `position`, `rotation` und der Szene des Raums). Alte Projekte werden beim Öffnen umgewandelt.
 - **`wordpress-plugin/diy-mamis-3d/`**: das Plugin.
   - `includes/rest.php` REST-Schnittstelle, `includes/store.php` Ablage der Projekte,
     `includes/claude.php` Aufruf der Claude-API (über die WordPress-HTTP-API, damit das Plugin

@@ -5,7 +5,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { buildScene } from './build';
 import { Measure } from './measure';
 import { WalkControls, type Blocker } from './walk';
-import type { Scene, Selection } from './types';
+import { toHome, toWorld, walkStart, walkWorld } from './home';
+import type { Home, Scene, Selection } from './types';
 
 /** Grundriss (x, y, z-oben) -> three.js (x, y-oben, z). Siehe auch build.ts. */
 export const planToThree = (x: number, y: number, z = 0) => new THREE.Vector3(x, z, -y);
@@ -18,7 +19,11 @@ export interface ViewerEvents {
   onSelect: (sel: Selection) => void;
   onObjectMoved: (id: string, position: [number, number, number], rotation: number) => void;
   onMeasured?: (meters: number) => void;
+  /** Ein anderer Raum der Wohnung wurde angetippt. */
+  onRoomPick?: (index: number) => void;
 }
+
+interface RoomView { group: THREE.Group; index: number; scene: Scene }
 
 export class Viewer {
   readonly renderer: THREE.WebGLRenderer;
@@ -27,6 +32,10 @@ export class Viewer {
   readonly controls: OrbitControls;
   readonly gizmo: TransformControls;
   private root: THREE.Group | null = null;
+  private homeRoot = new THREE.Group();
+  private rooms: RoomView[] = [];
+  private home: Home | null = null;
+  private active = 0;
   private nodes = new Map<string, THREE.Object3D>();
   private selection: Selection = null;
   private selectionBox: THREE.BoxHelper | null = null;
@@ -119,42 +128,70 @@ export class Viewer {
 
   // ------------------------------------------------------------------ Laden
 
-  /** Baut die Szene aus den Daten neu auf (dauert nur Millisekunden). */
+  /** Einzelner Raum (Startseite, Demo): wird als Wohnung mit einem Raum gezeigt. */
   setScene(data: Scene, keepCamera: boolean): void {
-    const built = buildScene(data);
-    const prevSel = this.selection;
+    this.setHome(toHome(data), 0, keepCamera);
+  }
+
+  /** Baut die Wohnung neu auf (dauert nur Millisekunden). Bearbeitet wird der Raum active. */
+  setHome(home: Home, active: number, keepCamera: boolean): void {
+    const prevSel = active === this.active ? this.selection : null;
     this.gizmo.detach();
-    if (this.root) {
-      this.scene.remove(this.root);
-      disposeTree(this.root);
-    }
-    this.root = built;
+    this.measure.detach();
+    this.scene.remove(this.homeRoot);
+    disposeTree(this.homeRoot);
+    this.homeRoot = new THREE.Group();
+    this.rooms = [];
     this.nodes.clear();
-    this.root.traverse((o) => {
-      const id = o.userData?.dm_id as string | undefined;
-      if (id) this.nodes.set(id, o);
-      if ((o as THREE.Mesh).isMesh) {
-        const mesh = o as THREE.Mesh;
-        const type = findData(mesh)?.dm_type;
-        mesh.castShadow = type === 'object' || type === 'panel';
-        mesh.receiveShadow = true;
-        for (const m of materials(mesh)) {
-          if (m.transparent || m.opacity < 1) m.depthWrite = false;
+    this.home = home;
+    this.active = Math.min(active, home.rooms.length - 1);
+    home.rooms.forEach((r, index) => {
+      const group = buildScene(r.scene);
+      group.position.set(r.position[0], 0, -r.position[1]);
+      group.rotation.y = (r.rotation * Math.PI) / 180;
+      group.userData.dm_room = index;
+      group.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          const mesh = o as THREE.Mesh;
+          const type = findData(mesh)?.dm_type;
+          mesh.castShadow = type === 'object' || type === 'panel';
+          mesh.receiveShadow = true;
+          for (const m of materials(mesh)) {
+            if (m.transparent || m.opacity < 1) m.depthWrite = false;
+          }
         }
-      }
+        if (index === this.active) {
+          const id = o.userData?.dm_id as string | undefined;
+          if (id) this.nodes.set(id, o);
+        }
+      });
+      this.homeRoot.add(group);
+      this.rooms.push({ group, index, scene: r.scene });
     });
-    this.scene.add(this.root);
-    this.sceneData = data;
-    this.measure.setRoom(data);
-    this.walk.setScene(data, this.blockers());
-    if (!keepCamera) this.frame();
+    this.scene.add(this.homeRoot);
+    this.homeRoot.updateMatrixWorld(true);
+    this.root = this.rooms[this.active].group;
+    this.sceneData = home.rooms[this.active].scene;
+    this.measure.attachTo(this.root);
+    this.measure.setRoom(this.sceneData);
+    this.updateWalkWorld();
+    if (!keepCamera) this.frame(home.rooms.length > 1);
     this.setSelection(prevSel && this.nodeFor(prevSel) ? prevSel : null, false);
   }
 
-  /** Kamera so setzen, dass der ganze Raum sichtbar ist. */
-  frame(): void {
-    if (!this.sceneData || this.mode === 'walk') return;
-    const { center, size } = this.roomBounds();
+  get activeRoom(): number {
+    return this.active;
+  }
+
+  /** Kamera so setzen, dass der Raum (all: die ganze Wohnung) sichtbar ist. */
+  frame(all = false): void {
+    if (!this.sceneData || !this.home || this.mode === 'walk') return;
+    const idx = all ? this.home.rooms.map((_, i) => i) : [this.active];
+    const pts = idx.flatMap((i) => this.home!.rooms[i].scene.room.polygon.map((p) => toWorld(this.home!.rooms[i], p)));
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const center = new THREE.Vector2((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
+    const size = new THREE.Vector2(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
     const h = this.sceneData.room.height;
     this.controls.target.copy(planToThree(center.x, center.y, h * 0.35));
     if (this.mode === 'top') {
@@ -175,11 +212,11 @@ export class Viewer {
     const wasWalk = this.mode === 'walk';
     this.mode = mode;
     if (mode === 'walk') {
-      if (!this.sceneData) return;
+      if (!this.home) return;
       this.gizmo.detach();
       this.controls.enabled = false;
       this.controls.autoRotate = false;
-      this.walk.enable(this.sceneData, this.blockers());
+      this.walk.enable(walkWorld(this.home), this.blockers(), walkStart(this.home.rooms[this.active]));
       return;
     }
     if (wasWalk) {
@@ -206,28 +243,32 @@ export class Viewer {
     if (tool === 'measure') this.setSelection(null, true);
   }
 
-  /** Grundriss-Rechtecke der Möbel, an denen man beim Begehen nicht vorbeikommt. */
+  /** Grundriss-Rechtecke der Möbel aller Räume, an denen man beim Begehen nicht vorbeikommt. */
   private blockers(): Blocker[] {
     const out: Blocker[] = [];
-    for (const o of this.sceneData?.objects ?? []) {
-      if (o.size[2] < 0.25 || o.position[2] > 1.2) continue; // Teppiche und Hängendes
-      const node = this.nodes.get(o.id);
-      if (!node) continue;
-      const b = new THREE.Box3().setFromObject(node);
-      if (b.isEmpty()) continue;
-      out.push({ minX: b.min.x, maxX: b.max.x, minY: -b.max.z, maxY: -b.min.z });
+    for (const r of this.rooms) {
+      r.group.traverse((node) => {
+        if (node.userData?.dm_type !== 'object') return;
+        const o = r.scene.objects.find((x) => x.id === node.userData.dm_id);
+        if (!o || o.size[2] < 0.25 || o.position[2] > 1.2) return; // Teppiche und Hängendes
+        const b = new THREE.Box3().setFromObject(node);
+        if (!b.isEmpty()) out.push({ minX: b.min.x, maxX: b.max.x, minY: -b.max.z, maxY: -b.min.z });
+      });
     }
     return out;
   }
 
+  private updateWalkWorld(): void {
+    if (this.home) this.walk.setWorld(walkWorld(this.home), this.blockers());
+  }
+
   /** Punkt auf einer sichtbaren Fläche unter dem Mauszeiger (für das Messen). */
   private surfacePoint(e: PointerEvent): THREE.Vector3 | null {
-    if (!this.root) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const hit = ray.intersectObject(this.root, true).find((h) => isVisible(h.object));
+    const hit = ray.intersectObject(this.homeRoot, true).find((h) => isVisible(h.object));
     return hit ? hit.point.clone() : null;
   }
 
@@ -283,7 +324,21 @@ export class Viewer {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
     if (!this.root) return;
-    const hits = ray.intersectObject(this.root, true).filter((h) => isVisible(h.object));
+    const hits = ray.intersectObject(this.homeRoot, true).filter((h) => isVisible(h.object));
+    const roomOf = (o: THREE.Object3D | null): number => {
+      while (o) {
+        if (typeof o.userData?.dm_room === 'number') return o.userData.dm_room;
+        o = o.parent;
+      }
+      return -1;
+    };
+    if (hits.length) {
+      const r = roomOf(hits[0].object);
+      if (r >= 0 && r !== this.active) {
+        this.events.onRoomPick?.(r);
+        return;
+      }
+    }
     for (const hit of hits) {
       const data = findData(hit.object);
       if (!data) continue;
@@ -339,7 +394,7 @@ export class Viewer {
     this.events.onObjectMoved(sel.id, threeToPlan(node.position), Math.round(rot * 10) / 10);
     this.selectionBox?.update();
     this.measure.updateSelection();
-    if (this.sceneData) this.walk.setScene(this.sceneData, this.blockers());
+    this.updateWalkWorld();
   }
 
   // ------------------------------------------------------------------ Änderungen ohne Neubau
@@ -363,7 +418,11 @@ export class Viewer {
 
   updateData(data: Scene): void {
     this.sceneData = data;
-    this.walk.setScene(data, this.blockers());
+    if (this.home) {
+      this.home = { ...this.home, rooms: this.home.rooms.map((r, i) => (i === this.active ? { ...r, scene: data } : r)) };
+      this.rooms[this.active].scene = data;
+    }
+    this.updateWalkWorld();
   }
 
   screenshot(): string {
@@ -383,30 +442,31 @@ export class Viewer {
     this.measure.render(this.scene, this.camera);
   }
 
-  /** Wände zwischen Kamera und Raum ausblenden (Puppenhaus-Ansicht). */
+  /** Wände zwischen Kamera und Raum ausblenden (Puppenhaus-Ansicht), für jeden Raum der Wohnung. */
   private updateWallVisibility(): void {
-    if (!this.sceneData || !this.root) return;
-    const cam = this.camera.position;
-    const camPlan = threeToPlan(cam);
-    const hidden = new Set<string>();
-    const poly = this.sceneData.room.polygon;
-    for (const [id, node] of this.nodes) {
-      const d = node.userData;
-      if (d.dm_type !== 'wall') continue;
-      const i = d.dm_index as number;
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      if (!a || !b) continue;
-      const mx = (a[0] + b[0]) / 2;
-      const my = (a[1] + b[1]) / 2;
-      const outside = (camPlan[0] - mx) * d.dm_nx + (camPlan[1] - my) * d.dm_ny > 0.05;
-      node.visible = !outside;
-      if (outside) hidden.add(id);
-    }
-    for (const node of this.nodes.values()) {
-      const d = node.userData;
-      if (d.dm_wall) node.visible = !hidden.has(d.dm_wall);
-      if (d.dm_type === 'ceiling') node.visible = camPlan[2] < this.sceneData.room.height - 0.05;
+    const walking = this.mode === 'walk';
+    for (const r of this.rooms) {
+      const camPlan = threeToPlan(r.group.worldToLocal(this.camera.position.clone()));
+      const poly = r.scene.room.polygon;
+      const hidden = new Set<string>();
+      r.group.traverse((node) => {
+        const d = node.userData;
+        if (d.dm_type !== 'wall') return;
+        const i = d.dm_index as number;
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        if (!a || !b) return;
+        const mx = (a[0] + b[0]) / 2;
+        const my = (a[1] + b[1]) / 2;
+        const outside = !walking && (camPlan[0] - mx) * d.dm_nx + (camPlan[1] - my) * d.dm_ny > 0.05;
+        node.visible = !outside;
+        if (outside) hidden.add(d.dm_id);
+      });
+      r.group.traverse((node) => {
+        const d = node.userData;
+        if (d.dm_wall) node.visible = !hidden.has(d.dm_wall);
+        if (d.dm_type === 'ceiling') node.visible = camPlan[2] < r.scene.room.height - 0.05;
+      });
     }
   }
 

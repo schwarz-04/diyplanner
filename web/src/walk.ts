@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { inwardNormal, pointInPolygon } from './measure';
-import type { Scene } from './types';
+import type { WalkWorld } from './home';
+import { pointInPolygon } from './measure';
 
 /**
  * Ich-Perspektive: auf Augenhöhe durch den Raum gehen.
@@ -24,7 +24,7 @@ export class WalkControls {
   private keys = new Set<string>();
   private joy = { x: 0, y: 0 };
   private look: { id: number; x: number; y: number } | null = null;
-  private scene: Scene | null = null;
+  private world: WalkWorld | null = null;
   private blockers: Blocker[] = [];
   readonly joystick: HTMLElement;
   private knob: HTMLElement;
@@ -92,29 +92,14 @@ export class WalkControls {
     this.joystick.addEventListener('pointercancel', endJoy);
   }
 
-  /** Startet im Raum: an der Tür (falls vorhanden), sonst in der Mitte, Blick zur Raummitte. */
-  enable(scene: Scene, blockers: Blocker[]): void {
-    this.setScene(scene, blockers);
-    const poly = scene.room.polygon;
-    const xs = poly.map((p) => p[0]);
-    const ys = poly.map((p) => p[1]);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    let start: [number, number] = [cx, cy];
-    scene.walls.some((w, i) => {
-      const door = w.openings.find((o) => o.type === 'door');
-      if (!door) return false;
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      const n = inwardNormal(poly, i);
-      start = [a[0] + ((b[0] - a[0]) / len) * door.offset + n[0] * 0.6, a[1] + ((b[1] - a[1]) / len) * door.offset + n[1] * 0.6];
-      return true;
-    });
-    if (!this.free(start[0], start[1])) start = this.findFree(start, [cx, cy]);
-    [this.x, this.y] = start;
-    this.yaw = Math.atan2(-(cx - this.x), cy - this.y);
-    if (Math.hypot(cx - this.x, cy - this.y) < 0.3) this.yaw = 0;
+  /** Startet an (x, y) im gemeinsamen Grundriss mit Blick auf look. */
+  enable(world: WalkWorld, blockers: Blocker[], start: { x: number; y: number; look: [number, number] }): void {
+    this.setWorld(world, blockers);
+    let p: [number, number] = [start.x, start.y];
+    if (!this.free(p[0], p[1])) p = this.findFree(p, start.look);
+    [this.x, this.y] = p;
+    const dx = start.look[0] - this.x, dy = start.look[1] - this.y;
+    this.yaw = Math.hypot(dx, dy) < 0.3 ? 0 : Math.atan2(-dx, dy);
     this.pitch = -0.08;
     this.enabled = true;
     this.camera.fov = 70;
@@ -133,8 +118,8 @@ export class WalkControls {
   }
 
   /** Neue Szene oder verschobene Möbel übernehmen. */
-  setScene(scene: Scene, blockers: Blocker[]): void {
-    this.scene = scene;
+  setWorld(world: WalkWorld, blockers: Blocker[]): void {
+    this.world = world;
     this.blockers = blockers;
   }
 
@@ -165,7 +150,7 @@ export class WalkControls {
   }
 
   private apply(): void {
-    const eye = Math.min(EYE, (this.scene?.room.height ?? 2.5) - 0.15);
+    const eye = Math.min(EYE, (Number.isFinite(this.world?.height) ? this.world!.height : 2.5) - 0.15);
     this.camera.position.set(this.x, eye, -this.y);
     // three.js: Blick (−sin yaw, cos yaw) im Grundriss = (−sin yaw, 0, −cos yaw)
     const dir = new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
@@ -173,11 +158,11 @@ export class WalkControls {
   }
 
   private free(x: number, y: number): boolean {
-    const poly = this.scene?.room.polygon;
-    if (!poly || !pointInPolygon(poly, x, y)) return false;
-    for (let i = 0; i < poly.length; i++) {
-      if (segmentDistance(poly[i], poly[(i + 1) % poly.length], x, y) < RADIUS) return false;
-    }
+    const w = this.world;
+    if (!w) return false;
+    const inside = w.rooms.some((p) => pointInPolygon(p, x, y)) || w.passages.some((p) => pointInPolygon(p, x, y));
+    if (!inside) return false;
+    for (const [a, b] of w.solids) if (segmentDistance(a, b, x, y) < RADIUS) return false;
     for (const b of this.blockers) {
       if (x > b.minX - RADIUS * 0.6 && x < b.maxX + RADIUS * 0.6 && y > b.minY - RADIUS * 0.6 && y < b.maxY + RADIUS * 0.6) return false;
     }

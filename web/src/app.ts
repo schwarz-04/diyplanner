@@ -1,11 +1,12 @@
 import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
+import { attachRoom, emptyRoom, replaceRoom, toHome } from './home';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
   clone, cm, findPanel, m, newObject, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
 } from './edits';
-import type { Catalog, Category, Panel, Project, Scene, SceneObject, Selection } from './types';
+import type { Catalog, Category, Home, Panel, Project, Scene, SceneObject, Selection } from './types';
 
 type Attrs = Record<string, any>;
 type Child = Node | string | null | undefined | false;
@@ -54,10 +55,15 @@ export class App {
   private viewer!: Viewer;
   private catalog!: Catalog;
   private project: Project | null = null;
-  private scene: Scene | null = null;
+  private home: Home | null = null;
+  private active = 0;
+  /** Der Raum der Wohnung, der gerade bearbeitet wird. */
+  private get scene(): Scene | null {
+    return this.home?.rooms[this.active]?.scene ?? null;
+  }
   private selection: Selection = null;
-  private undoStack: Scene[] = [];
-  private redoStack: Scene[] = [];
+  private undoStack: Home[] = [];
+  private redoStack: Home[] = [];
   private saveTimer: number | undefined;
   private saveChain: Promise<unknown> = Promise.resolve();
   private busy = 0;
@@ -110,6 +116,7 @@ export class App {
       onSelect: (sel) => this.select(sel),
       onObjectMoved: (id, pos, rot) => this.objectMoved(id, pos, rot),
       onMeasured: () => this.renderMenu(),
+      onRoomPick: (i) => this.switchRoom(i),
     });
     this.renderDock();
     new ResizeObserver(() => this.updateShift()).observe(this.root);
@@ -141,8 +148,9 @@ export class App {
     this.catalog = d.catalog;
     this.elTitle.textContent = d.title;
     try {
-      this.scene = d.scene;
-      this.viewer.setScene(d.scene, false);
+      this.home = toHome(d.scene);
+      this.active = 0;
+      this.viewer.setHome(this.home, 0, false);
       this.hideOverlay();
       this.select(null);
       this.setStatus('Demo: Änderungen bleiben im Browser');
@@ -293,33 +301,40 @@ export class App {
     }
   }
 
+  /** Wartet auf die KI-Analyse und liefert das Projekt mit fertiger Szene. */
+  private async waitForProject(id: string): Promise<Project & { scene: Scene | Home }> {
+    let p = await this.api.project(id);
+    const started = Date.now();
+    while (p.state === 'queued' || p.state === 'analyzing') {
+      const secs = Math.round((Date.now() - started) / 1000);
+      this.showProgress(`${p.step || 'Verarbeitung läuft'} (${secs} s, meist etwa eine Minute)`);
+      await sleep(2000);
+      p = await this.api.project(id);
+    }
+    if (p.state === 'error') throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
+    if (!p.scene && p.analysis) {
+      // Erste Öffnung nach der Analyse: KI-Antwort in eine Szene umwandeln und speichern.
+      p.scene = analysisToScene(p.analysis, p.kind ?? 'video', this.catalog);
+      p = await this.api.saveScene(id, p.scene);
+    }
+    if (!p.scene) throw new Error('Die Szene konnte nicht erstellt werden.');
+    return p as Project & { scene: Scene | Home };
+  }
+
   private async openProject(id: string): Promise<void> {
     this.showProgress('Projekt wird geladen');
     try {
-      let p = await this.api.project(id);
-      const started = Date.now();
-      while (p.state === 'queued' || p.state === 'analyzing') {
-        const secs = Math.round((Date.now() - started) / 1000);
-        this.showProgress(`${p.step || 'Verarbeitung läuft'} (${secs} s, meist etwa eine Minute)`);
-        await sleep(2000);
-        p = await this.api.project(id);
-      }
-      if (p.state === 'error') throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
-      if (!p.scene && p.analysis) {
-        // Erste Öffnung nach der Analyse: KI-Antwort in eine Szene umwandeln und speichern.
-        p.scene = analysisToScene(p.analysis, p.kind ?? 'video', this.catalog);
-        p = await this.api.saveScene(id, p.scene);
-      }
-      if (!p.scene) throw new Error('Die Szene konnte nicht erstellt werden.');
+      const p = await this.waitForProject(id);
       this.project = p;
-      this.scene = p.scene;
+      this.home = toHome(p.scene);
+      this.active = 0;
       this.undoStack = [];
       this.redoStack = [];
       this.stopShowcase();
       const url = new URL(location.href);
       url.searchParams.set(this.opts.projectParam ?? 'projekt', id);
       history.replaceState(null, '', url);
-      this.viewer.setScene(p.scene, false);
+      this.viewer.setHome(this.home, 0, false);
       this.hideOverlay();
       this.select(null);
       this.setStatus('Gespeichert');
@@ -336,23 +351,41 @@ export class App {
    * rebuild = false: der Editor hat die Änderung schon selbst angezeigt, es wird nur gespeichert.
    */
   private async apply(next: Scene, rebuild: boolean): Promise<void> {
-    if (!this.scene) return;
-    this.undoStack.push(this.scene);
+    if (!this.home) return;
+    this.applyHome(replaceRoom(this.home, this.active, next), rebuild);
+  }
+
+  /** Änderung an der ganzen Wohnung (Raum anbauen oder entfernen, oder ein Raum geändert). */
+  private applyHome(next: Home, rebuild: boolean): void {
+    if (!this.home) return;
+    this.undoStack.push(this.home);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack = [];
     this.show(next, rebuild);
   }
 
-  private show(next: Scene, rebuild: boolean): void {
-    this.scene = next;
+  private show(next: Home, rebuild: boolean): void {
+    this.home = next;
+    this.active = Math.min(this.active, next.rooms.length - 1);
     if (rebuild) {
-      this.viewer.setScene(next, true);
+      this.viewer.setHome(next, this.active, true);
       this.renderPanel();
     } else {
-      this.viewer.updateData(next);
+      this.viewer.updateData(next.rooms[this.active].scene);
     }
     this.updateButtons();
     this.scheduleSave();
+  }
+
+  /** Anderen Raum der Wohnung bearbeiten. */
+  private switchRoom(index: number): void {
+    if (!this.home || index === this.active || !this.home.rooms[index]) return;
+    if (this.tool === 'measure') this.setTool('select');
+    this.active = index;
+    this.selection = null;
+    this.viewer.setHome(this.home, index, true);
+    this.renderPanel();
+    this.toast(`${this.scene!.room.name || `Raum ${index + 1}`} wird bearbeitet`);
   }
 
   private scheduleSave(): void {
@@ -367,7 +400,7 @@ export class App {
 
   private persist(): Promise<unknown> {
     window.clearTimeout(this.saveTimer);
-    const snapshot = this.scene!;
+    const snapshot = this.home!;
     const id = this.project!.id;
     this.saveChain = this.saveChain.then(async () => {
       this.setBusy(+1, 'Speichern …');
@@ -386,15 +419,15 @@ export class App {
 
   private undo(): void {
     const prev = this.undoStack.pop();
-    if (!prev || !this.scene) return;
-    this.redoStack.push(this.scene);
+    if (!prev || !this.home) return;
+    this.redoStack.push(this.home);
     this.show(prev, true);
   }
 
   private redo(): void {
     const next = this.redoStack.pop();
-    if (!next || !this.scene) return;
-    this.undoStack.push(this.scene);
+    if (!next || !this.home) return;
+    this.undoStack.push(this.home);
     this.show(next, true);
   }
 
@@ -562,7 +595,8 @@ export class App {
           this.renderMenu();
         } }, 'Messungen löschen')),
       h('div', { class: 'dm-row', style: 'margin-top:8px' },
-        mode !== 'walk' && h('button', { class: 'dm-btn ghost', onclick: () => this.viewer.frame() }, 'Ansicht zurücksetzen')),
+        mode !== 'walk' && h('button', { class: 'dm-btn ghost', onclick: () => this.viewer.frame() }, 'Ansicht zurücksetzen'),
+        mode !== 'walk' && (this.home?.rooms.length ?? 0) > 1 && h('button', { class: 'dm-btn ghost', onclick: () => this.viewer.frame(true) }, 'Ganze Wohnung')),
     ];
   }
 
@@ -573,7 +607,14 @@ export class App {
     const rect = rectangleWalls(s);
     const wallInput = (i: number) => numberInput(cm(wallLength(s, i)), 30, 3000, (v) =>
       this.apply(setWallLength(s, i, m(v), this.proportional), true), 'cm');
+    const rooms = this.home!.rooms;
     return [
+      h('div', { class: 'dm-rooms' },
+        rooms.map((r, i) => h('button', {
+          class: `dm-chip${i === this.active ? ' active' : ''}`,
+          onclick: () => this.switchRoom(i),
+        }, r.scene.room.name || `Raum ${i + 1}`)),
+        h('button', { class: 'dm-chip add', onclick: () => this.showAddRoom() }, '+ Raum anbauen')),
       field('Name', h('input', {
         class: 'dm-input', value: s.room.name,
         onchange: (e: Event) => this.apply({ ...clone(s), room: { ...clone(s.room), name: (e.target as HTMLInputElement).value } }, false)
@@ -596,6 +637,98 @@ export class App {
           wallInput(i)))),
       s.meta.notes && h('details', { class: 'dm-details' }, h('summary', {}, 'Hinweise der KI'), h('pre', {}, s.meta.notes)),
     ];
+  }
+
+  // ------------------------------------------------------------------ Wohnung: Räume anbauen
+
+  private removeRoom(): void {
+    if (!this.home || this.home.rooms.length < 2) return;
+    const name = this.scene?.room.name || 'Raum';
+    const next = { ...this.home, rooms: this.home.rooms.filter((_, i) => i !== this.active) };
+    this.active = Math.max(0, this.active - 1);
+    this.selection = null;
+    this.applyHome(next, true);
+    this.toast(`${name} entfernt. Mit ↶ holst du ihn zurück.`);
+  }
+
+  private showAddRoom(): void {
+    const s = this.scene!;
+    const lengths = s.walls.map((_, i) => wallLength(s, i));
+    // Vorschlag: längste Wand ohne Tür
+    let wall = lengths.indexOf(Math.max(...lengths.filter((_, i) => !s.walls[i].openings.some((o) => o.type === 'door')), 0));
+    if (wall < 0) wall = lengths.indexOf(Math.max(...lengths));
+    const wallSelect = h('select', { class: 'dm-input', onchange: (e: Event) => (wall = Number((e.target as HTMLSelectElement).value)) },
+      lengths.map((l, i) => h('option', { value: String(i), selected: i === wall }, `Wand ${i + 1} (${cm(l)} cm)`))) as HTMLSelectElement;
+    const server = !this.opts.demo && this.analysisAvailable && this.canCreate;
+    let kind = 'empty';
+    const name = h('input', { class: 'dm-input', value: `Raum ${this.home!.rooms.length + 1}` }) as HTMLInputElement;
+    const num = (v: number) => h('input', { class: 'dm-input', type: 'number', min: 100, max: 3000, value: String(v) }) as HTMLInputElement;
+    const len = num(400), wid = num(300);
+    const file = h('input', { type: 'file', multiple: true, accept: 'video/*', class: 'dm-file' }) as HTMLInputElement;
+    const hint = h('textarea', { class: 'dm-input', rows: 2, placeholder: 'Optional: z. B. "Flur, 1,20 m breit"' }) as HTMLTextAreaElement;
+    const emptyBox = h('div', {},
+      field('Name', name),
+      h('div', { class: 'dm-row three' }, field('Länge (cm)', len), field('Breite (cm)', wid)));
+    const uploadBox = h('div', { hidden: true },
+      server ? h('div', {}, file, hint)
+        : h('p', { class: 'dm-note' }, this.opts.demo
+          ? 'In dieser Demo geht nur ein leerer Raum. Auf der Webseite kannst du auch ein Video oder Fotos hochladen.'
+          : 'Für Video oder Fotos bitte anmelden (und den API-Key in den Plugin-Einstellungen eintragen).'));
+    const err = h('p', { class: 'dm-error', hidden: true });
+    const tabs = [['empty', 'Leerer Raum'], ['video', 'Aus Video'], ['photos', 'Aus Fotos']].map(([k, label]) =>
+      h('button', {
+        class: `dm-tab${k === kind ? ' active' : ''}`,
+        onclick: (e: Event) => {
+          kind = k;
+          emptyBox.hidden = k !== 'empty';
+          uploadBox.hidden = k === 'empty';
+          file.accept = k === 'video' ? 'video/*' : 'image/*';
+          tabs.forEach((t) => t.classList.toggle('active', t === e.currentTarget));
+        },
+      }, label));
+    const fail = (text: string) => { err.textContent = text; err.hidden = false; };
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'Raum anbauen'),
+      h('p', { class: 'dm-muted' }, 'Der neue Raum wird an eine Wand des aktuellen Raums gesetzt. In beide Wände kommt eine Tür, durch die du beim Begehen gehen kannst.'),
+      field(`An welche Wand von „${s.room.name || 'diesem Raum'}“?`, wallSelect),
+      h('div', { class: 'dm-tabs' }, tabs),
+      emptyBox, uploadBox, err,
+      h('div', { class: 'dm-row end' },
+        h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
+        h('button', { class: 'dm-btn primary', onclick: async () => {
+          if (kind === 'empty') {
+            const l = Number(len.value), w = Number(wid.value);
+            if (!(l >= 100 && w >= 100)) return fail('Bitte Länge und Breite in cm angeben (mindestens 100).');
+            this.attachNewRoom(wall, emptyRoom(name.value.trim() || 'Neuer Raum', m(l), m(w), s.room.height, s), fail);
+            return;
+          }
+          if (!server) return fail('Das geht hier leider nicht, siehe Hinweis oben.');
+          const files = Array.from(file.files ?? []);
+          if (!files.length) return fail('Bitte zuerst eine Datei auswählen.');
+          try {
+            this.showProgress('Dateien werden vorbereitet');
+            const input = await prepareInput(files, (t) => this.showProgress(t));
+            this.showProgress('Bilder werden hochgeladen');
+            const { id } = await this.api.createProject(kind, input, hint.value);
+            this.api.analyze(id).catch(() => undefined);
+            const p = await this.waitForProject(id);
+            this.attachNewRoom(wall, toHome(p.scene).rooms[0].scene, (text) => this.showError(text));
+          } catch (e) {
+            this.showError((e as Error).message);
+          }
+        } }, 'Anbauen')),
+    ));
+  }
+
+  private attachNewRoom(wall: number, room: Scene, fail: (text: string) => void): void {
+    const res = attachRoom(this.home!, this.active, wall, room);
+    if (typeof res === 'string') return fail(res);
+    this.hideOverlay();
+    this.active = res.rooms.length - 1;
+    this.selection = null;
+    this.applyHome(res, true);
+    this.viewer.frame(true);
+    this.toast(`${room.room.name || 'Neuer Raum'} angebaut. Unter Ansicht → Begehen gehst du durch die Tür.`);
   }
 
   // ------------------------------------------------------------------ Auswahl
@@ -653,6 +786,8 @@ export class App {
     const panel = sel?.kind === 'panel' ? findPanel(s, sel.id) : null;
     const panels = s.walls.reduce((n, w) => n + w.panels.length, 0);
     return [
+      (this.home?.rooms.length ?? 0) > 1 && h('button', { class: 'dm-btn danger wide', style: 'margin-bottom:8px', onclick: () => this.removeRoom() },
+        `Raum „${s.room.name || 'ohne Namen'}“ aus der Wohnung entfernen`),
       h('h4', { style: 'margin-top:0' }, 'Auswahl'),
       obj ? h('button', { class: 'dm-btn danger wide', onclick: () => this.deleteObject(obj.id) }, `${obj.label || 'Möbel'} entfernen`)
         : panel ? h('button', { class: 'dm-btn danger wide', onclick: () => this.removeSelected() }, 'Paneel entfernen')

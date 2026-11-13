@@ -64,6 +64,20 @@ export interface Scene {
   meta: { source: string; notes: string; dimensions_confirmed: boolean };
 }
 
+/** Ein Raum der Wohnung mit seiner Lage im gemeinsamen Grundriss (Drehung in Grad, gegen den Uhrzeigersinn). */
+export interface PlacedRoom {
+  id: string;
+  position: [number, number];
+  rotation: number;
+  scene: Scene;
+}
+
+/** Wohnung: mehrere Räume, die über Türen verbunden sind (Format Version 2). */
+export interface Home {
+  version: 2;
+  rooms: PlacedRoom[];
+}
+
 export interface Project {
   id: string;
   state: 'queued' | 'analyzing' | 'ready' | 'error' | 'unknown';
@@ -71,7 +85,8 @@ export interface Project {
   error: string | null;
   version: number;
   kind?: string;
-  scene: Scene | null;
+  /** Version 1: ein Raum (Scene), Version 2: Wohnung (Home). */
+  scene: Scene | Home | null;
   /** Rohantwort der KI, solange daraus noch keine Szene gebaut wurde. */
   analysis?: import('./analysis').RoomAnalysis | null;
 }

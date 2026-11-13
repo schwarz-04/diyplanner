@@ -37,6 +37,18 @@ export class Measure {
     }
   }
 
+  /** Raum- und Möbelmaße hängen am bearbeiteten Raum (dessen Koordinaten), freie Messungen am Weltsystem. */
+  attachTo(group: THREE.Object3D): void {
+    group.add(this.roomGroup, this.selGroup);
+  }
+
+  detach(): void {
+    clear(this.roomGroup);
+    clear(this.selGroup);
+    this.roomGroup.removeFromParent();
+    this.selGroup.removeFromParent();
+  }
+
   setSize(w: number, h: number): void {
     this.labels.setSize(w, h);
   }
@@ -95,6 +107,9 @@ export class Measure {
     if (!node || !this.data || !this.showSelection) return;
     const box = new THREE.Box3().setFromObject(node);
     if (box.isEmpty()) return;
+    // In Raumkoordinaten umrechnen (der Raum kann in der Wohnung verschoben und gedreht sein)
+    const parent = this.selGroup.parent;
+    if (parent) box.applyMatrix4(parent.matrixWorld.clone().invert());
     // three -> Grundriss: x = x, y = -z
     const minX = box.min.x, maxX = box.max.x, minY = -box.max.z, maxY = -box.min.z;
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;

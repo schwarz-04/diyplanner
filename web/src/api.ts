@@ -1,5 +1,5 @@
 import type { AnalysisInput } from './analysis';
-import type { Catalog, Project, Scene } from './types';
+import type { Catalog, Home, Project, Scene } from './types';
 
 /**
  * Schnittstelle zum WordPress-Plugin (REST-Namespace dm3d/v1, siehe wordpress-plugin/).
@@ -61,7 +61,7 @@ export class Api {
     return this.request<Project>(`/api/projects/${id}/analyze`, { method: 'POST' });
   }
 
-  saveScene(id: string, scene: Scene) {
+  saveScene(id: string, scene: Scene | Home) {
     return this.json<Project>(`/api/projects/${id}/scene`, 'PUT', scene);
   }
 }
