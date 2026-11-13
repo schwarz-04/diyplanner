@@ -31,6 +31,23 @@ const KIND_LABEL: Record<string, string> = {
 export interface AppOptions {
   apiBase: string;
   projectParam?: string;
+  /** Demo ohne Server: feste Szene, Änderungen an Möbeln und Farben laufen nur im Browser. */
+  demo?: DemoData;
+}
+
+export interface DemoData {
+  title: string;
+  scene: Scene;
+  catalog: Catalog;
+  glbUrl: string;
+  libraryUrl: string;
+  renderUrl?: string;
+}
+
+/** Teil der Szene, den nur Blender umbauen kann (Raumform, Höhe, Fenster/Türen, Paneele). */
+function geometryKey(s: Scene): string {
+  return JSON.stringify([s.room.polygon, s.room.height,
+    s.walls.map((w) => [w.thickness, w.openings, w.panels.map((p) => ({ ...p, color: '' }))])]);
 }
 
 export class App {
@@ -87,6 +104,11 @@ export class App {
     });
     window.addEventListener('keydown', (e) => this.onKey(e));
 
+    if (this.opts.demo) {
+      await this.startDemo(this.opts.demo);
+      return;
+    }
+
     try {
       const [catalog, health] = await Promise.all([this.api.catalog(), this.api.health()]);
       this.catalog = catalog;
@@ -102,9 +124,40 @@ export class App {
     this.updateButtons();
   }
 
+  private async startDemo(d: DemoData): Promise<void> {
+    this.catalog = d.catalog;
+    this.elTitle.textContent = d.title;
+    this.showProgress('Raum wird geladen');
+    try {
+      this.scene = d.scene;
+      await this.viewer.load(d.glbUrl, d.scene, false);
+      this.viewer.rememberBaseSizes(d.scene);
+      await this.viewer.loadLibrary(d.libraryUrl, Object.fromEntries(
+        Object.entries(d.catalog.categories).map(([k, v]) => [k, v.size])));
+      this.hideOverlay();
+      this.select(null);
+      this.setStatus('Demo: Änderungen bleiben im Browser');
+      this.updateButtons();
+    } catch (err) {
+      this.showError((err as Error).message);
+    }
+  }
+
+  private demoNotice(text: string): void {
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'In der Demo nicht verfügbar'),
+      h('p', {}, text),
+      h('div', { class: 'dm-row end' },
+        h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Zurück zum Raum'))));
+  }
+
   // ================================================================== Projekt anlegen / laden
 
   private showStart(): void {
+    if (this.opts.demo) {
+      this.demoNotice('Für einen neuen Raum aus Video, Fotos oder Grundriss braucht es den Server mit KI-Analyse und Blender. Diese Demo zeigt die fertig analysierte Küche.');
+      return;
+    }
     let kind = 'video';
     const fileInput = h('input', { type: 'file', multiple: true, accept: 'video/*', class: 'dm-file' }) as HTMLInputElement;
     const hint = h('textarea', {
@@ -206,6 +259,11 @@ export class App {
    */
   private async apply(next: Scene, rebuild: boolean): Promise<void> {
     if (!this.scene) return;
+    if (this.opts.demo && geometryKey(next) !== geometryKey(this.scene)) {
+      this.toast('Maße, Fenster, Türen und Wandpaneele ändert Blender auf dem Server. In dieser Demo geht das noch nicht.');
+      this.renderPanel();
+      return;
+    }
     this.undoStack.push(this.scene);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack = [];
@@ -224,6 +282,12 @@ export class App {
 
   private persist(reload: boolean): Promise<unknown> {
     window.clearTimeout(this.saveTimer);
+    if (this.opts.demo) {
+      this.viewer.syncScene(this.scene!);
+      if (reload) this.renderPanel();
+      this.setStatus('Demo: Änderungen bleiben im Browser');
+      return Promise.resolve();
+    }
     const snapshot = this.scene!;
     const id = this.project!.id;
     this.saveChain = this.saveChain.then(async () => {
@@ -574,6 +638,16 @@ export class App {
   // ================================================================== Rendering
 
   private async renderImage(): Promise<void> {
+    const demo = this.opts.demo;
+    if (demo) {
+      if (!demo.renderUrl) return this.demoNotice('Das Foto-Rendering läuft mit Blender auf dem Server.');
+      this.showOverlay(h('div', { class: 'dm-card wide' },
+        h('img', { src: demo.renderUrl, class: 'dm-render', alt: 'Gerendertes Bild des Raums' }),
+        h('p', { class: 'dm-muted small' }, 'Vorab mit Blender gerendert, zeigt den Raum vor deinen Änderungen. Live-Rendering gibt es mit dem Server.'),
+        h('div', { class: 'dm-row end' },
+          h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
+      return;
+    }
     if (!this.project) return;
     await this.saveChain;
     this.showProgress('Blender rendert ein Foto deines Raums (ca. 1 Minute)');

@@ -84,3 +84,21 @@ muss vorher auf den VPS zeigen. Daten liegen im Docker-Volume `data`.
 - Zugang: Wer den Projekt-Link kennt, kann das Projekt bearbeiten. Konten und Bezahlung
   folgen später über WordPress.
 - Die KI-Analyse ist geschrieben, aber noch nicht mit echten Videos getestet (wartet auf den API-Key).
+
+## Demo ohne Server
+
+Der Editor kann eine fertige Szene auch ganz ohne Backend zeigen (z. B. als statische Seite).
+Dann laufen Umsehen, Verschieben, Drehen, Löschen, Hinzufügen, Umfärben und „Raum leeren“ im
+Browser. Maße, Fenster/Türen, Paneele und Live-Rendering brauchen weiterhin den Server.
+
+```bash
+python blender/build_scene.py szene.json demo/room.glb
+python tools/build_library.py demo/library.glb
+cp szene.json demo/scene.json && cp shared/catalog.json demo/catalog.json
+```
+
+```html
+<div id="app" class="dm-fullpage" data-demo="demo/"></div>
+```
+
+Optional: `data-room` / `data-library` für andere Dateinamen, `data-render` für ein vorab gerendertes Bild.

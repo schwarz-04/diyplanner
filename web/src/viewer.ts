@@ -237,6 +237,76 @@ export class Viewer {
     this.sceneData = data;
   }
 
+  // ------------------------------------------------------------------ Demo-Modus ohne Server
+
+  private templates = new Map<string, THREE.Object3D>();
+  private baseSizes = new Map<string, [number, number, number]>();
+
+  /** Lädt Möbel-Vorlagen (ein Objekt je Kategorie in Standardgröße), aus denen neue Möbel geklont werden. */
+  async loadLibrary(url: string, sizes: Record<string, [number, number, number]>): Promise<void> {
+    const gltf = await this.loader.loadAsync(url);
+    gltf.scene.traverse((o) => {
+      const d = o.userData;
+      if (d?.dm_type === 'object' && d.dm_category && !this.templates.has(d.dm_category)) {
+        this.templates.set(d.dm_category, o);
+        this.baseSizes.set(`tpl:${d.dm_category}`, sizes[d.dm_category]);
+      }
+    });
+  }
+
+  /** Merkt sich die Größe, mit der Blender die Objekte des geladenen GLB gebaut hat. */
+  rememberBaseSizes(data: Scene): void {
+    for (const o of data.objects) this.baseSizes.set(o.id, [...o.size] as [number, number, number]);
+  }
+
+  /**
+   * Gleicht die Möbel in der 3D-Ansicht mit den Szenendaten ab, ohne dass Blender neu baut:
+   * fehlende werden aus Vorlagen geklont, gelöschte entfernt, Lage, Größe und Farbe übernommen.
+   */
+  syncScene(data: Scene): void {
+    if (!this.root) return;
+    this.sceneData = data;
+    const wanted = new Set(data.objects.map((o) => o.id));
+    for (const [id, node] of [...this.nodes]) {
+      if (node.userData.dm_type === 'object' && !wanted.has(id)) this.removeNode(id);
+    }
+    for (const o of data.objects) {
+      let node = this.nodes.get(o.id);
+      if (!node) {
+        const tpl = this.templates.get(o.category) ?? this.templates.get('box');
+        if (!tpl) continue;
+        node = tpl.clone(true);
+        const tplKey = `${tpl.userData.dm_id}_main`;
+        node.traverse((c) => {
+          const mesh = c as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          mesh.castShadow = mesh.receiveShadow = true;
+          mesh.geometry = mesh.geometry.clone();
+          mesh.material = Array.isArray(mesh.material)
+            ? mesh.material.map((m) => cloneMat(m, tplKey, o.id))
+            : cloneMat(mesh.material, tplKey, o.id);
+        });
+        node.userData = { ...tpl.userData, dm_id: o.id, dm_label: o.label };
+        this.baseSizes.set(o.id, this.baseSizes.get(`tpl:${o.category}`) ?? [...o.size] as [number, number, number]);
+        this.root.add(node);
+        this.nodes.set(o.id, node);
+      }
+      const base = this.baseSizes.get(o.id) ?? o.size;
+      node.position.copy(planToThree(o.position[0], o.position[1], o.position[2]));
+      node.rotation.set(0, THREE.MathUtils.degToRad(o.rotation), 0);
+      // Blender: Breite x, Tiefe y, Höhe z -> three.js: x, Höhe y, Tiefe z
+      node.scale.set(o.size[0] / base[0], o.size[2] / base[2], o.size[1] / base[1]);
+      this.setColor(o.id, o.color);
+    }
+    data.walls.forEach((w) => {
+      this.setColor(w.id, w.color);
+      w.panels.forEach((p) => this.setColor(p.id, p.color));
+    });
+    this.setColor('floor', data.floor.color);
+    this.setColor('ceiling', data.ceiling.color);
+    this.selectionBox?.update();
+  }
+
   screenshot(): string {
     this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
@@ -334,6 +404,12 @@ function toSelection(d: Record<string, any>): Selection {
     default:
       return null;
   }
+}
+
+function cloneMat(m: THREE.Material, tplKey: string, id: string): THREE.Material {
+  const c = m.clone();
+  if (m.name === tplKey) c.name = `${id}_main`;
+  return c;
 }
 
 function disposeTree(root: THREE.Object3D): void {
