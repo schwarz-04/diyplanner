@@ -183,7 +183,7 @@ def build_content(files: list[Path], kind: str, hint: str) -> list[dict]:
 
 
 def analyze(files: list[Path], kind: str, hint: str = "") -> Scene:
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=api_key())
     content = build_content(files, kind, hint)
     response = client.messages.parse(
         model=MODEL,
@@ -225,7 +225,12 @@ def to_scene(a: RoomAnalysis, kind: str) -> Scene:
     return scene.normalized()
 
 
+def api_key() -> str | None:
+    """ANTHROPIC_API_KEY, alternativ DM_ANTHROPIC_API_KEY (so heißt die Variable in der Cloud-Umgebung)."""
+    return os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("DM_ANTHROPIC_API_KEY") or None
+
+
 def available() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return bool(api_key() or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
