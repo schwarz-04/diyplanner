@@ -34,6 +34,9 @@ export interface AppOptions {
   /** WordPress-REST-Nonce (für angemeldete Nutzer). */
   nonce?: string;
   projectParam?: string;
+  /** Vollbild im Plugin: Link zurück zur Webseite (z. B. Startseite) mit ihrem Namen. */
+  backUrl?: string;
+  backLabel?: string;
   /** Demo ohne Server: feste Szene, Änderungen an Möbeln und Farben laufen nur im Browser. */
   demo?: DemoData;
 }
@@ -81,7 +84,9 @@ export class App {
     this.root.classList.add('dm-app');
     this.root.append(
       h('header', { class: 'dm-top' },
-        h('div', { class: 'dm-brand' }, h('span', { class: 'dm-logo' }, '◆'), this.elTitle),
+        h('div', { class: 'dm-brand' },
+          this.opts.backUrl ? h('a', { class: 'dm-backlink', href: this.opts.backUrl, title: 'Zurück zur Webseite' }, '← ' + (this.opts.backLabel || 'Webseite')) : null,
+          h('span', { class: 'dm-logo' }, '◆'), this.elTitle),
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
           h('span', { class: 'dm-sep' }),

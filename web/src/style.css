@@ -33,6 +33,12 @@
 .dm-fullbleed { border-left: 0; border-right: 0; border-radius: 0; }
 body:not(:has(.wp-site-blocks)) .dm-fullbleed { width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); }
 body:has(.dm-fullpage) { margin: 0; }
+/* Vollbild-Seite des Plugins: nur der Raumplaner, Admin-Leiste wird abgezogen. */
+html:has(body.dm3d-vollbild) { background: #faf8f5; }
+body.dm3d-vollbild { margin: 0; padding: 0; background: #faf8f5; overflow: hidden; }
+.dm-app.dm-vollbild { width: 100%; height: calc(100vh - var(--wp-admin--admin-bar--height, 0px)); height: calc(100dvh - var(--wp-admin--admin-bar--height, 0px)); }
+.dm-app .dm-backlink { color: var(--dm-muted); text-decoration: none; font-weight: 400; font-size: 13px; white-space: nowrap; margin-right: 6px; }
+.dm-app .dm-backlink:hover { color: var(--dm-accent); }
 
 .dm-app .dm-top {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -146,8 +152,12 @@ body:has(.dm-fullpage) { margin: 0; }
   .dm-app .dm-stage { flex: 1 1 55%; }
   .dm-app .dm-panel { width: 100%; flex: 1 1 45%; border-left: 0; border-top: 1px solid var(--dm-border); }
   .dm-app .dm-actions .dm-btn.ghost { padding: 6px 8px; }
-  .dm-app .dm-top { gap: 8px; }
-  .dm-app .dm-actions { flex-wrap: nowrap; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+  .dm-app .dm-top { gap: 4px 8px; flex-wrap: wrap; padding: 6px 8px; }
+  .dm-app .dm-brand { width: 100%; }
+  .dm-app .dm-actions { width: 100%; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; min-width: 0; scrollbar-width: none; }
   .dm-app .dm-actions > * { flex-shrink: 0; white-space: nowrap; }
   .dm-app .dm-status { display: none; }
+}
+@media (max-width: 600px) {
+  .dm-app .dm-backlink { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
 }

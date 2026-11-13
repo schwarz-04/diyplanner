@@ -2,7 +2,7 @@
 /**
  * Plugin Name: DIY Mamis Raumplaner
  * Description: 3D-Raumplaner: Aus Video, Fotos oder Grundriss wird per KI ein editierbarer 3D-Raum. Einbinden per Shortcode [diy_mamis_raumplaner].
- * Version: 0.2.0
+ * Version: 0.3.0
  * Requires at least: 6.5
  * Requires PHP: 7.4
  * Text Domain: diy-mamis-3d
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const DM3D_VERSION = '0.2.0';
+const DM3D_VERSION = '0.3.0';
 const DM3D_OPT_KEY = 'dm3d_api_key';
 const DM3D_OPT_MODEL = 'dm3d_model';
 const DM3D_OPT_LOGIN = 'dm3d_login_required';
@@ -105,17 +105,69 @@ function dm3d_settings_page()
             </table>
             <?php submit_button(); ?>
         </form>
-        <p>Einbinden: Shortcode <code>[diy_mamis_raumplaner]</code> auf einer Seite einfügen. Optional mit Höhe:
-            <code>[diy_mamis_raumplaner hoehe="800px"]</code>. Der Editor nutzt die volle Fensterbreite;
-            mit <code>breite="spalte"</code> bleibt er in der Inhaltsspalte des Themes.</p>
+        <p>Einbinden: Shortcode <code>[diy_mamis_raumplaner]</code> auf einer Seite einfügen. Die Seite zeigt dann
+            nur den Raumplaner, bildschirmfüllend und ohne Kopfzeile des Themes.</p>
+        <p>Soll der Raumplaner stattdessen innerhalb der normalen Seite erscheinen:
+            <code>[diy_mamis_raumplaner ansicht="seite"]</code>, optional mit <code>hoehe="800px"</code>
+            und <code>breite="voll"</code>.</p>
     </div>
     <?php
 }
 
+// --------------------------------------------------------------------------- Vollbild
+// Seiten mit dem Shortcode zeigen den Raumplaner bildschirmfüllend, ohne Kopfzeile, Menü und
+// Hintergrund des Themes. Mit [diy_mamis_raumplaner ansicht="seite"] bleibt er in der Seite.
+
+function dm3d_is_fullscreen_page(): bool
+{
+    static $result = null;
+    if ($result !== null) {
+        return $result;
+    }
+    $result = false;
+    if (!is_singular()) {
+        return $result;
+    }
+    $post = get_post();
+    if (!$post || !has_shortcode($post->post_content, 'diy_mamis_raumplaner')) {
+        return $result;
+    }
+    if (preg_match_all('/' . get_shortcode_regex(['diy_mamis_raumplaner']) . '/', $post->post_content, $m)) {
+        foreach ($m[3] as $raw) {
+            $atts = shortcode_parse_atts($raw);
+            if (is_array($atts) && ($atts['ansicht'] ?? '') === 'seite') {
+                return $result;
+            }
+        }
+    }
+    return $result = true;
+}
+
+add_filter('template_include', function ($template) {
+    return dm3d_is_fullscreen_page() ? DM3D_DIR . 'templates/vollbild.php' : $template;
+}, 99);
+
+// Im Vollbild nur die eigenen Styles laden, damit das Theme nichts überschreibt.
+add_action('wp_enqueue_scripts', function () {
+    if (!dm3d_is_fullscreen_page()) {
+        return;
+    }
+    dm3d_enqueue_assets(); // schon im <head>, damit die Seite nicht kurz ungestylt erscheint
+    global $wp_styles;
+    foreach ((array) $wp_styles->queue as $handle) {
+        if (!in_array($handle, ['dm3d-editor', 'admin-bar', 'dashicons'], true)) {
+            wp_dequeue_style($handle);
+        }
+    }
+}, 9999);
+
 // --------------------------------------------------------------------------- Shortcode
 
-add_shortcode('diy_mamis_raumplaner', function ($atts) {
-    $atts = shortcode_atts(['hoehe' => '', 'breite' => 'voll'], $atts, 'diy_mamis_raumplaner');
+function dm3d_enqueue_assets(): void
+{
+    if (wp_style_is('dm3d-editor', 'enqueued')) {
+        return;
+    }
     $base = plugin_dir_url(__FILE__) . 'assets/';
     wp_enqueue_style('dm3d-editor', $base . 'editor.css', [], DM3D_VERSION);
     if (function_exists('wp_enqueue_script_module')) {
@@ -126,13 +178,25 @@ add_shortcode('diy_mamis_raumplaner', function ($atts) {
             return $handle === 'dm3d-editor' ? str_replace('<script ', '<script type="module" ', $tag) : $tag;
         }, 10, 2);
     }
-    $style = $atts['hoehe'] ? sprintf(' style="height:%s"', esc_attr($atts['hoehe'])) : '';
-    $class = $atts['breite'] === 'voll' ? ' class="alignfull dm-fullbleed"' : '';
+}
+
+add_shortcode('diy_mamis_raumplaner', function ($atts) {
+    $atts = shortcode_atts(['hoehe' => '', 'breite' => 'spalte', 'ansicht' => ''], $atts, 'diy_mamis_raumplaner');
+    $fullscreen = dm3d_is_fullscreen_page();
+    dm3d_enqueue_assets();
+    $style = $atts['hoehe'] && !$fullscreen ? sprintf(' style="height:%s"', esc_attr($atts['hoehe'])) : '';
+    if ($fullscreen) {
+        $class = ' class="dm-fullpage dm-vollbild"';
+    } else {
+        $class = $atts['breite'] === 'voll' ? ' class="alignfull dm-fullbleed"' : '';
+    }
     return sprintf(
-        '<div data-diy-mamis%s data-api="%s" data-nonce="%s"%s></div>',
+        '<div data-diy-mamis%s data-api="%s" data-nonce="%s" data-back-url="%s" data-back-label="%s"%s></div>',
         $class,
         esc_attr(untrailingslashit(rest_url(DM3D_Rest::NS))),
         esc_attr(wp_create_nonce('wp_rest')),
+        $fullscreen ? esc_url(home_url('/')) : '',
+        esc_attr(get_bloginfo('name')),
         $style
     );
 });

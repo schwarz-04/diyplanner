@@ -45,8 +45,10 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
 1. In WordPress unter *Plugins → Installieren → Plugin hochladen* die ZIP-Datei hochladen und aktivieren.
 2. Unter *Einstellungen → DIY Mamis Raumplaner* den Anthropic-API-Key eintragen
    (oder in der `wp-config.php`: `define('DM3D_ANTHROPIC_API_KEY', '…');`).
-3. Auf einer Seite den Shortcode `[diy_mamis_raumplaner]` einfügen.
-   Optional `hoehe="800px"`; mit `breite="spalte"` bleibt der Editor in der Inhaltsspalte des Themes.
+3. Auf einer Seite den Shortcode `[diy_mamis_raumplaner]` einfügen. Die Seite zeigt dann nur den
+   Raumplaner, bildschirmfüllend und ohne Kopfzeile, Menü und Hintergrund des Themes; oben links
+   führt ein Link zurück zur Webseite. Soll er stattdessen in der normalen Seite stehen:
+   `[diy_mamis_raumplaner ansicht="seite"]`, optional mit `hoehe="800px"` und `breite="voll"`.
 
 Neue Räume können standardmäßig nur angemeldete Nutzer anlegen, weil jede Analyse KI-Guthaben
 kostet (grob 15–30 Cent). Das lässt sich in den Einstellungen abschalten. Bearbeiten kann jeder,
