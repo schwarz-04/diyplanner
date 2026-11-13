@@ -182,8 +182,15 @@ def build_content(files: list[Path], kind: str, hint: str) -> list[dict]:
 # --------------------------------------------------------------------------- Analyse
 
 
+def _api_key() -> str | None:
+    # DM_ANTHROPIC_API_KEY lets the key be stored under a project-specific name,
+    # e.g. in hosted environments that reserve ANTHROPIC_API_KEY for themselves.
+    return os.environ.get("DM_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+
+
 def analyze(files: list[Path], kind: str, hint: str = "") -> Scene:
-    client = anthropic.Anthropic()
+    key = _api_key()
+    client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
     content = build_content(files, kind, hint)
     response = client.messages.parse(
         model=MODEL,
@@ -226,6 +233,6 @@ def to_scene(a: RoomAnalysis, kind: str) -> Scene:
 
 
 def available() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return bool(_api_key() or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 

@@ -41,6 +41,7 @@ Voraussetzungen: Python 3.13, Node 22, ffmpeg.
 python3.13 -m venv .venv && . .venv/bin/activate
 pip install -r backend/requirements.txt
 export ANTHROPIC_API_KEY=...        # optional, ohne Key geht nur der Demo-Raum
+# alternativ DM_ANTHROPIC_API_KEY=... (z.B. in Claude-Cloud-Umgebungen, die ANTHROPIC_API_KEY selbst belegen)
 
 # Editor bauen
 (cd web && npm ci && npm run build)
