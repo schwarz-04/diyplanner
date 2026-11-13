@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "categories": {
+    "sofa":         { "label": "Sofa",              "size": [2.10, 0.92, 0.82], "color": "#8a8f98" },
+    "armchair":     { "label": "Sessel",            "size": [0.85, 0.85, 0.85], "color": "#b5a48c" },
+    "chair":        { "label": "Stuhl",             "size": [0.45, 0.52, 0.85], "color": "#a07850" },
+    "dining_table": { "label": "Esstisch",          "size": [1.60, 0.90, 0.75], "color": "#b08a5a" },
+    "coffee_table": { "label": "Couchtisch",        "size": [1.10, 0.60, 0.42], "color": "#6e5440" },
+    "side_table":   { "label": "Beistelltisch",     "size": [0.45, 0.45, 0.50], "color": "#6e5440" },
+    "desk":         { "label": "Schreibtisch",      "size": [1.40, 0.70, 0.74], "color": "#d8d2c4" },
+    "bed":          { "label": "Bett",              "size": [1.60, 2.10, 0.95], "color": "#e4ddd0" },
+    "wardrobe":     { "label": "Kleiderschrank",    "size": [1.50, 0.60, 2.10], "color": "#f2f0eb" },
+    "shelf":        { "label": "Regal",             "size": [0.80, 0.35, 1.80], "color": "#f2f0eb" },
+    "sideboard":    { "label": "Sideboard",         "size": [1.60, 0.45, 0.75], "color": "#3f3a36" },
+    "tv":           { "label": "Fernseher",         "size": [1.45, 0.06, 0.84], "color": "#111111" },
+    "lamp":         { "label": "Stehlampe",         "size": [0.40, 0.40, 1.60], "color": "#d9c9a3" },
+    "plant":        { "label": "Pflanze",           "size": [0.50, 0.50, 1.20], "color": "#4f7a46" },
+    "rug":          { "label": "Teppich",           "size": [2.00, 1.40, 0.01], "color": "#c9b8a0" },
+    "box":          { "label": "Sonstiges",         "size": [0.50, 0.50, 0.50], "color": "#9a9a9a" }
+  },
+  "panels": {
+    "slats":     { "label": "Holzlamellen",   "height": 2.40, "color": "#9c7650" },
+    "wainscot":  { "label": "Kassettenpaneel", "height": 1.10, "color": "#e9e4da" },
+    "flat":      { "label": "Glattes Paneel",  "height": 2.40, "color": "#c7b9a5" }
+  },
+  "floor_materials": {
+    "wood":     { "label": "Holz",    "color": "#b48a60" },
+    "tile":     { "label": "Fliesen", "color": "#d6d3cc" },
+    "carpet":   { "label": "Teppich", "color": "#a59d93" },
+    "concrete": { "label": "Beton",   "color": "#9b9b98" }
+  }
+}

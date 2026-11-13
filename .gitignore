@@ -1,0 +1,9 @@
+.venv*/
+node_modules/
+web/dist/
+data/
+.env
+__pycache__/
+*.pyc
+wordpress-plugin/diy-mamis-3d/assets/
+*.zip

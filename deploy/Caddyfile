@@ -1,0 +1,11 @@
+# Caddy holt automatisch ein HTTPS-Zertifikat für die Subdomain.
+{$DM_DOMAIN} {
+	request_body {
+		max_size 700MB
+	}
+	reverse_proxy app:8000 {
+		transport http {
+			read_timeout 10m
+		}
+	}
+}
