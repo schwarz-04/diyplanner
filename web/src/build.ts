@@ -1,5 +1,5 @@
 /**
- * Baut aus der Szenenbeschreibung (siehe backend/app/scene.py) die 3D-Szene direkt im Browser.
+ * Baut aus der Szenenbeschreibung (Format: web/src/types.ts) die 3D-Szene direkt im Browser.
  *
  * Geometrie wird im Grundriss-System aufgebaut (x, y, z nach oben) und dann in das
  * three.js-System (y nach oben) gedreht: (x, y, z) -> (x, z, -y), siehe planToThree.

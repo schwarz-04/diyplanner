@@ -23,7 +23,15 @@
   box-sizing: border-box;
 }
 .dm-app *, .dm-app *::before, .dm-app *::after { box-sizing: border-box; }
+/* Schrift- und Button-Stile des WordPress-Themes nicht übernehmen */
+.dm-app button, .dm-app input, .dm-app select, .dm-app textarea {
+  font: inherit; letter-spacing: normal; text-transform: none; line-height: 1.3;
+}
 .dm-fullpage { height: 100vh; border: 0; border-radius: 0; }
+/* Shortcode breite="voll": aus der schmalen Inhaltsspalte des Themes ausbrechen.
+   Block-Themes erledigen das über die Klasse alignfull, klassische Themes über die Rechnung. */
+.dm-fullbleed { border-left: 0; border-right: 0; border-radius: 0; }
+body:not(:has(.wp-site-blocks)) .dm-fullbleed { width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); }
 body:has(.dm-fullpage) { margin: 0; }
 
 .dm-app .dm-top {
@@ -138,5 +146,8 @@ body:has(.dm-fullpage) { margin: 0; }
   .dm-app .dm-stage { flex: 1 1 55%; }
   .dm-app .dm-panel { width: 100%; flex: 1 1 45%; border-left: 0; border-top: 1px solid var(--dm-border); }
   .dm-app .dm-actions .dm-btn.ghost { padding: 6px 8px; }
+  .dm-app .dm-top { gap: 8px; }
+  .dm-app .dm-actions { flex-wrap: nowrap; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+  .dm-app .dm-actions > * { flex-shrink: 0; white-space: nowrap; }
   .dm-app .dm-status { display: none; }
 }

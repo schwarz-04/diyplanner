@@ -1,90 +1,69 @@
 # DIY Mamis · 3D-Raumplaner (Prototyp)
 
-Aus einem Video, Fotos oder einem Grundriss wird eine editierbare 3D-Szene eines Raums.
-Im Browser kann man Möbel verschieben, drehen, löschen und hinzufügen, Wände und Möbel
-umfärben, Wandpaneele setzen, den Raum leeren und echte Maße eintragen. Die 3D-Szene baut
-der Editor selbst mit three.js, jede Änderung ist sofort sichtbar. Der Server übernimmt nur die
-KI-Analyse und das Speichern.
+Aus einem Video, Fotos oder einem Grundriss wird per KI ein editierbarer 3D-Raum.
+Im Browser kann man sich im Raum umsehen, Möbel verschieben, drehen, löschen und hinzufügen,
+Wände und Möbel umfärben, Wandpaneele, Fenster und Türen setzen, den Raum leeren und echte
+Maße eintragen. Alles läuft als ein WordPress-Plugin, ein eigener Server ist nicht nötig.
 
 ## Aufbau
 
 ```
-Browser (WordPress-Seite)              VPS
-┌──────────────────────────┐   HTTPS  ┌──────────────────────────────────────────┐
-│ Editor (Three.js)        │ ───────► │ API (FastAPI)                            │
-│  - baut 3D aus der Szene │          │  ├─ KI-Analyse (Claude): Bilder → Szene  │
-│  - ändert scene.json     │ ◄─────── │  ├─ Speichern der Szene                  │
-└──────────────────────────┘          │  └─ Dateien: data/projects/<id>/         │
-                                      └──────────────────────────────────────────┘
+Browser (WordPress-Seite mit Shortcode)            WordPress (Plugin)              Claude-API
+┌─────────────────────────────────────┐   REST   ┌─────────────────────────┐   HTTPS   ┌────────┐
+│ Editor (three.js)                   │ ───────► │ /wp-json/dm3d/v1/api/…  │ ────────► │ Claude │
+│  - schneidet Einzelbilder aus Video │          │  - KI-Analyse anstoßen  │ ◄──────── │        │
+│  - baut die 3D-Szene selbst         │ ◄─────── │  - Szene speichern      │           └────────┘
+│  - KI-Antwort → Szene               │          │  - uploads/dm3d-projekte│
+└─────────────────────────────────────┘          └─────────────────────────┘
 ```
 
-- **`shared/catalog.json`**: Möbelkategorien mit Standardmaßen und -farben, Paneeltypen, Bodenarten.
-- **`backend/app/scene.py`**: das Szenenformat (Raumkontur, Wände mit Fenstern/Türen/Paneelen,
-  Boden, Decke, Möbel). Es ist die einzige Quelle der Wahrheit.
-- **`backend/app/analysis.py`**: zieht Einzelbilder aus Videos (ffmpeg), schickt Bilder bzw.
-  Grundriss an Claude und bekommt eine strukturierte Raumbeschreibung zurück.
-- **`web/src/build.ts`**: baut die Szene mit three.js (Wände mit Aussparungen, Fenster,
-  Türzargen, Lamellen-/Kassettenpaneele, parametrische Möbel).
-- **`backend/app/main.py`**: API für Upload, Status und Speichern.
-- **`web/`**: der Editor (TypeScript, Three.js, Vite).
-- **`wordpress-plugin/`**: Plugin mit Shortcode `[diy_mamis_raumplaner]`.
+- **`web/`**: der Editor (TypeScript, three.js, Vite).
+  - `src/build.ts` baut die 3D-Szene (Wände mit Aussparungen, Fenster, Türen,
+    Lamellen-/Kassettenpaneele, parametrische Möbel). Jede Änderung ist sofort sichtbar.
+  - `src/analysis.ts` schneidet Einzelbilder aus dem Video (Canvas), verkleinert Fotos und
+    wandelt die KI-Antwort in eine Szene um.
+  - `src/types.ts` ist das Szenenformat.
+- **`wordpress-plugin/diy-mamis-3d/`**: das Plugin.
+  - `includes/rest.php` REST-Schnittstelle, `includes/store.php` Ablage der Projekte,
+    `includes/claude.php` Aufruf der Claude-API (über die WordPress-HTTP-API, damit das Plugin
+    ohne Composer-Abhängigkeiten auskommt).
+- **`shared/`**: Möbelkatalog, Demo-Raum, Prompt und Antwortschema der KI-Analyse.
+  `build.sh` kopiert sie ins Plugin.
 
-Alle Bearbeitungen zeigt der Editor sofort an und speichert im Hintergrund. Änderungen an der
-Geometrie (neue Möbel, Maße, Paneele, Fenster/Türen) baut er in wenigen Millisekunden neu.
+Ablauf einer Analyse: Der Browser schneidet 16 Einzelbilder aus dem Video und lädt nur diese
+hoch (etwa 2 MB statt des ganzen Videos). WordPress schickt sie an Claude und speichert die
+strukturierte Raumbeschreibung. Der Editor baut daraus die Szene und speichert sie.
 
-## Lokal starten
+## Plugin bauen und installieren
 
-Voraussetzungen: Python 3.13, Node 22, ffmpeg.
+Voraussetzung zum Bauen: Node 22.
 
 ```bash
-# Backend
-python3.13 -m venv .venv && . .venv/bin/activate
-pip install -r backend/requirements.txt
-export ANTHROPIC_API_KEY=...        # optional, ohne Key geht nur der Demo-Raum
-# alternativ DM_ANTHROPIC_API_KEY=... (z.B. in Claude-Cloud-Umgebungen, die ANTHROPIC_API_KEY selbst belegen)
-
-# Editor bauen
-(cd web && npm ci && npm run build)
-
-# Server: Editor + API auf http://localhost:8765
-cd backend && uvicorn app.main:app --port 8765
+wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
 ```
 
-Für die Entwicklung am Editor: `cd web && npm run dev` (leitet `/api` an Port 8765 weiter).
+1. In WordPress unter *Plugins → Installieren → Plugin hochladen* die ZIP-Datei hochladen und aktivieren.
+2. Unter *Einstellungen → DIY Mamis Raumplaner* den Anthropic-API-Key eintragen
+   (oder in der `wp-config.php`: `define('DM3D_ANTHROPIC_API_KEY', '…');`).
+3. Auf einer Seite den Shortcode `[diy_mamis_raumplaner]` einfügen.
+   Optional `hoehe="800px"`; mit `breite="spalte"` bleibt der Editor in der Inhaltsspalte des Themes.
 
-## Auf dem VPS
+Neue Räume können standardmäßig nur angemeldete Nutzer anlegen, weil jede Analyse KI-Guthaben
+kostet (grob 15–30 Cent). Das lässt sich in den Einstellungen abschalten. Bearbeiten kann jeder,
+der den Projekt-Link kennt.
+
+Anforderungen an den Webspace: PHP 7.4+, ausgehende HTTPS-Verbindungen, ein PHP-Zeitlimit von
+mindestens 2 Minuten für die Analyse (das Plugin versucht es selbst zu erhöhen) und
+`post_max_size` von mindestens 8 MB.
+
+## Editor entwickeln
 
 ```bash
-git clone <repo> && cd <repo>
-cp .env.example .env    # Domain, API-Key, WordPress-Domain eintragen
-docker compose up -d --build
+cd web && npm ci && npm run dev
 ```
 
-Caddy holt das HTTPS-Zertifikat für die Subdomain automatisch. Der DNS-Eintrag der Subdomain
-muss vorher auf den VPS zeigen. Daten liegen im Docker-Volume `data`.
-
-## In WordPress einbinden
-
-1. `wordpress-plugin/build.sh` ausführen, das erzeugt `wordpress-plugin/diy-mamis-3d.zip`.
-2. In WordPress unter *Plugins → Installieren → Plugin hochladen* die ZIP-Datei hochladen und aktivieren.
-3. Unter *Einstellungen → DIY Mamis Raumplaner* die Backend-Adresse eintragen (z. B. `https://app.example.de`).
-4. Auf einer Seite den Shortcode `[diy_mamis_raumplaner]` einfügen.
-
-## Stand und nächste Schritte
-
-- Möbel sind vorerst parametrische Modelle (aus Kategorie, Maßen und Farbe gebaut).
-  Echte Produkte (IKEA, Amazon) werden später über `product` an einem Möbelstück verknüpft;
-  die Maße kommen dann aus dem Katalog des Händlers.
-- Zugang: Wer den Projekt-Link kennt, kann das Projekt bearbeiten. Konten und Bezahlung
-  folgen später über WordPress.
-- Die KI-Analyse ist mit einem echten Küchenvideo getestet: Möbel und Anordnung stimmen gut,
-  die Maße weichen um 10–15 % ab und werden im Editor korrigiert.
-- Als Nächstes: fotorealistisches KI-Rendering der aktuellen Ansicht (Screenshot → Bildmodell).
-
-## Demo ohne Server
-
-Der Editor kann eine fertige Szene auch ganz ohne Backend zeigen (z. B. als statische Seite).
-Dann läuft alles außer dem Hochladen neuer Räume im Browser; Änderungen werden nicht gespeichert.
+Der Editor braucht für Projekte die REST-Schnittstelle des Plugins (`data-api` am Container).
+Ohne Server läuft er im Demo-Modus:
 
 ```html
 <div id="app" class="dm-fullpage" data-demo="demo/"></div>
@@ -92,3 +71,13 @@ Dann läuft alles außer dem Hochladen neuer Räume im Browser; Änderungen werd
 
 Der Ordner `demo/` enthält `scene.json` und `catalog.json` (Kopie von `shared/catalog.json`).
 Optional zeigt `data-render="bild.jpg"` ein vorab gerendertes Bild beim Klick auf „Foto-Rendering“.
+
+## Stand und nächste Schritte
+
+- Die KI-Analyse ist mit einem echten Küchenvideo getestet: Möbel und Anordnung stimmen gut,
+  die Maße weichen um 10–15 % ab und werden im Editor korrigiert.
+- Videos werden im Browser gelesen. iPhone-Videos im HEVC-Format kann nicht jeder Browser
+  öffnen (Safari ja, Chrome je nach Gerät); dann hilft „Kompatibel“ in den iPhone-Kamera-Einstellungen.
+- Möbel sind parametrische Modelle (aus Kategorie, Maßen und Farbe gebaut). Echte Produkte
+  (IKEA, Amazon) werden später über `product` verknüpft.
+- Als Nächstes: fotorealistisches KI-Rendering der aktuellen Ansicht (Screenshot → Bildmodell).

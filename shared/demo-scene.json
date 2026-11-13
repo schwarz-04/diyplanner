@@ -1,0 +1,250 @@
+{
+ "version": 1,
+ "room": {
+  "name": "Wohnzimmer (Demo)",
+  "height": 2.6,
+  "polygon": [
+   [
+    0.0,
+    0.0
+   ],
+   [
+    5.2,
+    0.0
+   ],
+   [
+    5.2,
+    4.0
+   ],
+   [
+    0.0,
+    4.0
+   ]
+  ]
+ },
+ "walls": [
+  {
+   "id": "wall_e77ebc50",
+   "color": "#efede8",
+   "thickness": 0.12,
+   "openings": [],
+   "panels": []
+  },
+  {
+   "id": "wall_c54f5008",
+   "color": "#efede8",
+   "thickness": 0.12,
+   "openings": [
+    {
+     "id": "op_60f12584",
+     "type": "door",
+     "offset": 0.8,
+     "width": 0.9,
+     "height": 2.05,
+     "sill": 0.0
+    }
+   ],
+   "panels": []
+  },
+  {
+   "id": "wall_5a62c125",
+   "color": "#e8e1d5",
+   "thickness": 0.12,
+   "openings": [],
+   "panels": []
+  },
+  {
+   "id": "wall_c1c79589",
+   "color": "#efede8",
+   "thickness": 0.12,
+   "openings": [
+    {
+     "id": "op_f0e4c2ea",
+     "type": "window",
+     "offset": 2.0,
+     "width": 1.6,
+     "height": 1.4,
+     "sill": 0.9
+    }
+   ],
+   "panels": []
+  }
+ ],
+ "floor": {
+  "material": "wood",
+  "color": "#b48a60"
+ },
+ "ceiling": {
+  "material": "plain",
+  "color": "#ffffff"
+ },
+ "objects": [
+  {
+   "id": "obj_3536335b",
+   "category": "sofa",
+   "label": "Sofa",
+   "position": [
+    2.6,
+    3.45,
+    0.0
+   ],
+   "rotation": 0.0,
+   "size": [
+    2.2,
+    0.95,
+    0.82
+   ],
+   "color": "#7d8590",
+   "product": null
+  },
+  {
+   "id": "obj_263300c9",
+   "category": "coffee_table",
+   "label": "Couchtisch",
+   "position": [
+    2.6,
+    2.3,
+    0.0
+   ],
+   "rotation": 0.0,
+   "size": [
+    1.1,
+    0.6,
+    0.42
+   ],
+   "color": "#6e5440",
+   "product": null
+  },
+  {
+   "id": "obj_885f7bb0",
+   "category": "rug",
+   "label": "Teppich",
+   "position": [
+    2.6,
+    2.4,
+    0.0
+   ],
+   "rotation": 0.0,
+   "size": [
+    2.4,
+    1.7,
+    0.01
+   ],
+   "color": "#c9b8a0",
+   "product": null
+  },
+  {
+   "id": "obj_1fefa54a",
+   "category": "tv",
+   "label": "Fernseher",
+   "position": [
+    2.6,
+    0.12,
+    0.75
+   ],
+   "rotation": 180.0,
+   "size": [
+    1.45,
+    0.06,
+    0.84
+   ],
+   "color": "#111111",
+   "product": null
+  },
+  {
+   "id": "obj_d5ac94bb",
+   "category": "sideboard",
+   "label": "Sideboard",
+   "position": [
+    2.6,
+    0.25,
+    0.0
+   ],
+   "rotation": 180.0,
+   "size": [
+    1.8,
+    0.42,
+    0.6
+   ],
+   "color": "#3f3a36",
+   "product": null
+  },
+  {
+   "id": "obj_b30c537c",
+   "category": "armchair",
+   "label": "Sessel",
+   "position": [
+    0.8,
+    2.0,
+    0.0
+   ],
+   "rotation": 90.0,
+   "size": [
+    0.85,
+    0.85,
+    0.85
+   ],
+   "color": "#b5a48c",
+   "product": null
+  },
+  {
+   "id": "obj_684a74ed",
+   "category": "lamp",
+   "label": "Stehlampe",
+   "position": [
+    0.45,
+    3.55,
+    0.0
+   ],
+   "rotation": 0.0,
+   "size": [
+    0.4,
+    0.4,
+    1.6
+   ],
+   "color": "#d9c9a3",
+   "product": null
+  },
+  {
+   "id": "obj_1d396b56",
+   "category": "plant",
+   "label": "Pflanze",
+   "position": [
+    4.75,
+    3.6,
+    0.0
+   ],
+   "rotation": 0.0,
+   "size": [
+    0.5,
+    0.5,
+    1.2
+   ],
+   "color": "#4f7a46",
+   "product": null
+  },
+  {
+   "id": "obj_4baa2c49",
+   "category": "shelf",
+   "label": "Regal",
+   "position": [
+    5.0,
+    1.9,
+    0.0
+   ],
+   "rotation": 270.0,
+   "size": [
+    0.8,
+    0.35,
+    1.8
+   ],
+   "color": "#f2f0eb",
+   "product": null
+  }
+ ],
+ "meta": {
+  "source": "demo",
+  "notes": "Demo-Szene",
+  "dimensions_confirmed": false
+ }
+}

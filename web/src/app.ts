@@ -1,4 +1,5 @@
 import { Api } from './api';
+import { analysisToScene, prepareInput } from './analysis';
 import { Viewer } from './viewer';
 import {
   clone, cm, findPanel, m, newObject, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
@@ -30,6 +31,8 @@ const KIND_LABEL: Record<string, string> = {
 
 export interface AppOptions {
   apiBase: string;
+  /** WordPress-REST-Nonce (für angemeldete Nutzer). */
+  nonce?: string;
   projectParam?: string;
   /** Demo ohne Server: feste Szene, Änderungen an Möbeln und Farben laufen nur im Browser. */
   demo?: DemoData;
@@ -55,6 +58,8 @@ export class App {
   private saveChain: Promise<unknown> = Promise.resolve();
   private busy = 0;
   private analysisAvailable = false;
+  private canCreate = true;
+  private loginUrl = '';
   private proportional = false;
   private gizmoMode: 'translate' | 'rotate' = 'translate';
 
@@ -69,7 +74,7 @@ export class App {
   private btnRedo = h('button', { class: 'dm-btn ghost', title: 'Wiederholen (Strg+Y)', onclick: () => this.redo() }, '↷');
 
   constructor(private root: HTMLElement, private opts: AppOptions) {
-    this.api = new Api(opts.apiBase);
+    this.api = new Api(opts.apiBase, opts.nonce);
   }
 
   async start(): Promise<void> {
@@ -105,6 +110,8 @@ export class App {
       const [catalog, health] = await Promise.all([this.api.catalog(), this.api.health()]);
       this.catalog = catalog;
       this.analysisAvailable = health.analysis_available;
+      this.canCreate = health.can_create ?? true;
+      this.loginUrl = health.login_url ?? '';
     } catch (err) {
       this.showError(`Server nicht erreichbar: ${(err as Error).message}`);
       return;
@@ -172,6 +179,7 @@ export class App {
     const err = h('p', { class: 'dm-error', hidden: true });
     const go = h('button', {
       class: 'dm-btn primary',
+      disabled: !this.canCreate || !this.analysisAvailable,
       onclick: async () => {
         const files = Array.from(fileInput.files ?? []);
         if (!files.length) {
@@ -191,11 +199,13 @@ export class App {
         helpEl,
         fileInput,
         hint,
-        !this.analysisAvailable && h('p', { class: 'dm-note' }, 'Hinweis: Die KI-Analyse ist auf dem Server noch nicht eingerichtet. Du kannst aber schon den Demo-Raum bearbeiten.'),
+        !this.analysisAvailable && h('p', { class: 'dm-note' }, 'Hinweis: Die KI-Analyse ist noch nicht eingerichtet (API-Key fehlt in den Plugin-Einstellungen). Du kannst aber schon den Demo-Raum bearbeiten.'),
+        !this.canCreate && h('p', { class: 'dm-note' }, 'Bitte melde dich an, um einen Raum zu erstellen. ',
+          this.loginUrl && h('a', { href: this.loginUrl }, 'Zur Anmeldung')),
         err,
         h('div', { class: 'dm-row end' },
           this.scene && h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
-          h('button', { class: 'dm-btn', onclick: () => this.create('demo', [], '') }, 'Demo-Raum öffnen'),
+          h('button', { class: 'dm-btn', disabled: !this.canCreate, onclick: () => this.create('demo', [], '') }, 'Demo-Raum öffnen'),
           go,
         ),
       ),
@@ -203,9 +213,20 @@ export class App {
   }
 
   private async create(kind: string, files: File[], hint: string): Promise<void> {
-    this.showProgress(kind === 'demo' ? 'Demo-Raum wird geladen' : 'Dateien werden hochgeladen');
     try {
-      const { id } = await this.api.createProject(kind, files, hint);
+      if (kind === 'demo') {
+        this.showProgress('Demo-Raum wird geladen');
+        const { id } = await this.api.createProject('demo', null, '');
+        await this.openProject(id);
+        return;
+      }
+      this.showProgress('Dateien werden vorbereitet');
+      const input = await prepareInput(files, (t) => this.showProgress(t));
+      this.showProgress('Bilder werden hochgeladen');
+      const { id } = await this.api.createProject(kind, input, hint);
+      // Die Analyse läuft im Hintergrund; openProject fragt den Stand ab, falls die
+      // Verbindung vorher abbricht (z. B. Zeitlimit beim Webhoster).
+      this.api.analyze(id).catch(() => undefined);
       await this.openProject(id);
     } catch (err) {
       this.showError((err as Error).message);
@@ -216,12 +237,20 @@ export class App {
     this.showProgress('Projekt wird geladen');
     try {
       let p = await this.api.project(id);
+      const started = Date.now();
       while (p.state === 'queued' || p.state === 'analyzing') {
-        this.showProgress(p.step || 'Verarbeitung läuft');
-        await sleep(1500);
+        const secs = Math.round((Date.now() - started) / 1000);
+        this.showProgress(`${p.step || 'Verarbeitung läuft'} (${secs} s, meist etwa eine Minute)`);
+        await sleep(2000);
         p = await this.api.project(id);
       }
-      if (p.state === 'error' || !p.scene) throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
+      if (p.state === 'error') throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
+      if (!p.scene && p.analysis) {
+        // Erste Öffnung nach der Analyse: KI-Antwort in eine Szene umwandeln und speichern.
+        p.scene = analysisToScene(p.analysis, p.kind ?? 'video', this.catalog);
+        p = await this.api.saveScene(id, p.scene);
+      }
+      if (!p.scene) throw new Error('Die Szene konnte nicht erstellt werden.');
       this.project = p;
       this.scene = p.scene;
       this.undoStack = [];

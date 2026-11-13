@@ -1,0 +1,234 @@
+{
+ "$defs": {
+  "AObject": {
+   "type": "object",
+   "title": "AObject",
+   "properties": {
+    "category": {
+     "enum": [
+      "sofa",
+      "armchair",
+      "chair",
+      "dining_table",
+      "coffee_table",
+      "side_table",
+      "desk",
+      "bed",
+      "wardrobe",
+      "shelf",
+      "sideboard",
+      "tv",
+      "lamp",
+      "plant",
+      "rug",
+      "box"
+     ],
+     "title": "Category"
+    },
+    "label_de": {
+     "type": "string",
+     "description": "Kurze deutsche Bezeichnung, z. B. 'Ecksofa grau'",
+     "title": "Label De"
+    },
+    "x_m": {
+     "type": "number",
+     "description": "Mittelpunkt der Grundfläche, x im Grundriss",
+     "title": "X M"
+    },
+    "y_m": {
+     "type": "number",
+     "description": "Mittelpunkt der Grundfläche, y im Grundriss",
+     "title": "Y M"
+    },
+    "elevation_m": {
+     "type": "number",
+     "description": "Abstand der Unterkante zum Boden, meist 0",
+     "title": "Elevation M"
+    },
+    "rotation_deg": {
+     "type": "number",
+     "description": "Drehung um die Hochachse; 0 = Vorderseite zeigt nach -y",
+     "title": "Rotation Deg"
+    },
+    "width_m": {
+     "type": "number",
+     "title": "Width M"
+    },
+    "depth_m": {
+     "type": "number",
+     "title": "Depth M"
+    },
+    "height_m": {
+     "type": "number",
+     "title": "Height M"
+    },
+    "color_hex": {
+     "type": "string",
+     "title": "Color Hex"
+    }
+   },
+   "additionalProperties": false,
+   "required": [
+    "category",
+    "label_de",
+    "x_m",
+    "y_m",
+    "elevation_m",
+    "rotation_deg",
+    "width_m",
+    "depth_m",
+    "height_m",
+    "color_hex"
+   ]
+  },
+  "AOpening": {
+   "type": "object",
+   "title": "AOpening",
+   "properties": {
+    "type": {
+     "enum": [
+      "door",
+      "window"
+     ],
+     "title": "Type"
+    },
+    "offset_m": {
+     "type": "number",
+     "description": "Abstand vom Wandanfang bis zur Mitte der Öffnung",
+     "title": "Offset M"
+    },
+    "width_m": {
+     "type": "number",
+     "title": "Width M"
+    },
+    "height_m": {
+     "type": "number",
+     "title": "Height M"
+    },
+    "sill_m": {
+     "type": "number",
+     "description": "Brüstungshöhe, bei Türen 0",
+     "title": "Sill M"
+    }
+   },
+   "additionalProperties": false,
+   "required": [
+    "type",
+    "offset_m",
+    "width_m",
+    "height_m",
+    "sill_m"
+   ]
+  },
+  "AWall": {
+   "type": "object",
+   "title": "AWall",
+   "properties": {
+    "color_hex": {
+     "type": "string",
+     "description": "Wandfarbe als #rrggbb",
+     "title": "Color Hex"
+    },
+    "openings": {
+     "type": "array",
+     "title": "Openings",
+     "items": {
+      "$ref": "#/$defs/AOpening"
+     }
+    }
+   },
+   "additionalProperties": false,
+   "required": [
+    "color_hex",
+    "openings"
+   ]
+  }
+ },
+ "type": "object",
+ "title": "RoomAnalysis",
+ "properties": {
+  "room_name": {
+   "type": "string",
+   "title": "Room Name"
+  },
+  "ceiling_height_m": {
+   "type": "number",
+   "title": "Ceiling Height M"
+  },
+  "corners": {
+   "type": "array",
+   "description": "Innenecken des Raums im Grundriss [[x, y], ...] in Metern, gegen den Uhrzeigersinn, erste Ecke bei [0, 0]",
+   "title": "Corners",
+   "items": {
+    "type": "array",
+    "items": {
+     "type": "number"
+    }
+   }
+  },
+  "walls": {
+   "type": "array",
+   "description": "Eine Wand pro Kante corners[i] -> corners[i+1]",
+   "title": "Walls",
+   "items": {
+    "$ref": "#/$defs/AWall"
+   }
+  },
+  "floor_material": {
+   "enum": [
+    "wood",
+    "tile",
+    "carpet",
+    "concrete"
+   ],
+   "title": "Floor Material"
+  },
+  "floor_color_hex": {
+   "type": "string",
+   "title": "Floor Color Hex"
+  },
+  "ceiling_color_hex": {
+   "type": "string",
+   "title": "Ceiling Color Hex"
+  },
+  "objects": {
+   "type": "array",
+   "title": "Objects",
+   "items": {
+    "$ref": "#/$defs/AObject"
+   }
+  },
+  "scale_reference": {
+   "type": "string",
+   "description": "Woran die Maße geschätzt wurden (z. B. Türhöhe 2,01 m)",
+   "title": "Scale Reference"
+  },
+  "confidence": {
+   "enum": [
+    "low",
+    "medium",
+    "high"
+   ],
+   "title": "Confidence"
+  },
+  "notes_de": {
+   "type": "string",
+   "description": "Unsicherheiten und Annahmen, kurz auf Deutsch",
+   "title": "Notes De"
+  }
+ },
+ "additionalProperties": false,
+ "required": [
+  "room_name",
+  "ceiling_height_m",
+  "corners",
+  "walls",
+  "floor_material",
+  "floor_color_hex",
+  "ceiling_color_hex",
+  "objects",
+  "scale_reference",
+  "confidence",
+  "notes_de"
+ ]
+}

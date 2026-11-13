@@ -1,7 +1,12 @@
+import type { AnalysisInput } from './analysis';
 import type { Catalog, Project, Scene } from './types';
 
+/**
+ * Schnittstelle zum WordPress-Plugin (REST-Namespace dm3d/v1, siehe wordpress-plugin/).
+ * base ist z. B. https://example.de/wp-json/dm3d/v1, nonce der WordPress-REST-Nonce.
+ */
 export class Api {
-  constructor(private base: string) {
+  constructor(private base: string, private nonce = '') {
     this.base = base.replace(/\/$/, '');
   }
 
@@ -9,13 +14,16 @@ export class Api {
     return path.startsWith('http') ? path : this.base + path;
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(this.url(path), init);
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers);
+    if (this.nonce) headers.set('X-WP-Nonce', this.nonce);
+    const res = await fetch(this.url(path), { ...init, headers, credentials: 'same-origin' });
     if (!res.ok) {
       let message = `Fehler ${res.status}`;
       try {
         const body = await res.json();
-        if (body?.detail) message = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        const detail = body?.message ?? body?.detail;
+        if (detail) message = typeof detail === 'string' ? detail : JSON.stringify(detail);
       } catch {
         /* keine JSON-Antwort */
       }
@@ -24,8 +32,12 @@ export class Api {
     return res.json() as Promise<T>;
   }
 
+  private json<T>(path: string, method: string, body: unknown): Promise<T> {
+    return this.request<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
   health() {
-    return this.request<{ ok: boolean; analysis_available: boolean }>('/api/health');
+    return this.request<{ ok: boolean; analysis_available: boolean; can_create: boolean; login_url?: string }>('/api/health');
   }
 
   catalog() {
@@ -36,19 +48,16 @@ export class Api {
     return this.request<Project>(`/api/projects/${id}`);
   }
 
-  createProject(kind: string, files: File[], hint: string) {
-    const form = new FormData();
-    form.append('kind', kind);
-    form.append('hint', hint);
-    for (const f of files) form.append('files', f, f.name);
-    return this.request<{ id: string }>('/api/projects', { method: 'POST', body: form });
+  createProject(kind: string, input: AnalysisInput | null, hint: string) {
+    return this.json<{ id: string }>('/api/projects', 'POST', { kind, hint, ...(input ?? {}) });
+  }
+
+  /** Startet die KI-Analyse. Kann bis zu ein paar Minuten dauern, der Stand ist auch per project() abrufbar. */
+  analyze(id: string) {
+    return this.request<Project>(`/api/projects/${id}/analyze`, { method: 'POST' });
   }
 
   saveScene(id: string, scene: Scene) {
-    return this.request<Project>(`/api/projects/${id}/scene`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(scene),
-    });
+    return this.json<Project>(`/api/projects/${id}/scene`, 'PUT', scene);
   }
 }

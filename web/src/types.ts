@@ -1,4 +1,4 @@
-// Spiegelt backend/app/scene.py (Szenenformat Version 1)
+// Szenenformat (Version 1). Koordinaten in Metern, Grundriss in der x/y-Ebene, z nach oben.
 
 export type Category =
   | 'sofa' | 'armchair' | 'chair' | 'dining_table' | 'coffee_table' | 'side_table' | 'desk'
@@ -70,7 +70,10 @@ export interface Project {
   step: string;
   error: string | null;
   version: number;
+  kind?: string;
   scene: Scene | null;
+  /** Rohantwort der KI, solange daraus noch keine Szene gebaut wurde. */
+  analysis?: import('./analysis').RoomAnalysis | null;
 }
 
 export interface Catalog {

@@ -22,7 +22,7 @@ async function boot(): Promise<void> {
       renderUrl: el.dataset.render,
     };
   }
-  new App(el, { apiBase, demo }).start();
+  new App(el, { apiBase, nonce: el.dataset.nonce, demo }).start();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
