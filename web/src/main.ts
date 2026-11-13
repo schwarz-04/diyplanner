@@ -9,8 +9,7 @@ async function boot(): Promise<void> {
   const el = document.querySelector<HTMLElement>('[data-diy-mamis]') ?? document.getElementById('app');
   if (!el) return;
   const apiBase = el.dataset.api ?? (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
-  // data-demo: Ordner mit scene.json, catalog.json, room.glb, library.glb (und optional render.png).
-  // data-room / data-library: andere Dateinamen, z. B. eingebettetes glTF als .json für Hosts ohne .glb.
+  // data-demo: Ordner mit scene.json und catalog.json; data-render: optional ein vorab gerendertes Bild.
   const demoDir = el.dataset.demo;
   let demo: DemoData | undefined;
   if (demoDir !== undefined) {
@@ -20,9 +19,7 @@ async function boot(): Promise<void> {
     demo = {
       title: el.dataset.title ?? scene.room?.name ?? 'Raumplaner',
       scene, catalog,
-      glbUrl: base + (el.dataset.room ?? 'room.glb'),
-      libraryUrl: base + (el.dataset.library ?? 'library.glb'),
-      renderUrl: el.dataset.render ?? base + 'render.png',
+      renderUrl: el.dataset.render,
     };
   }
   new App(el, { apiBase, demo }).start();

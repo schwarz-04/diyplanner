@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { buildScene } from './build';
 import type { Scene, Selection } from './types';
 
-/** Grundriss (x, y, z-oben) -> three.js (x, y-oben, z). Entspricht dem glTF-Export von Blender. */
+/** Grundriss (x, y, z-oben) -> three.js (x, y-oben, z). Siehe auch build.ts. */
 export const planToThree = (x: number, y: number, z = 0) => new THREE.Vector3(x, z, -y);
 export const threeToPlan = (v: THREE.Vector3): [number, number, number] => [v.x, -v.z, v.y];
 
@@ -28,7 +28,6 @@ export class Viewer {
   private selectionBox: THREE.BoxHelper | null = null;
   private sceneData: Scene | null = null;
   private mode: ViewMode = 'orbit';
-  private loader = new GLTFLoader();
   private pointerDown: { x: number; y: number } | null = null;
   private resizeObserver: ResizeObserver;
 
@@ -91,15 +90,16 @@ export class Viewer {
 
   // ------------------------------------------------------------------ Laden
 
-  async load(url: string, data: Scene, keepCamera: boolean): Promise<void> {
-    const gltf = await this.loader.parseAsync(await fetchModel(url), '');
+  /** Baut die Szene aus den Daten neu auf (dauert nur Millisekunden). */
+  setScene(data: Scene, keepCamera: boolean): void {
+    const built = buildScene(data);
     const prevSel = this.selection;
     this.gizmo.detach();
     if (this.root) {
       this.scene.remove(this.root);
       disposeTree(this.root);
     }
-    this.root = gltf.scene;
+    this.root = built;
     this.nodes.clear();
     this.root.traverse((o) => {
       const id = o.userData?.dm_id as string | undefined;
@@ -237,76 +237,6 @@ export class Viewer {
     this.sceneData = data;
   }
 
-  // ------------------------------------------------------------------ Demo-Modus ohne Server
-
-  private templates = new Map<string, THREE.Object3D>();
-  private baseSizes = new Map<string, [number, number, number]>();
-
-  /** Lädt Möbel-Vorlagen (ein Objekt je Kategorie in Standardgröße), aus denen neue Möbel geklont werden. */
-  async loadLibrary(url: string, sizes: Record<string, [number, number, number]>): Promise<void> {
-    const gltf = await this.loader.parseAsync(await fetchModel(url), '');
-    gltf.scene.traverse((o) => {
-      const d = o.userData;
-      if (d?.dm_type === 'object' && d.dm_category && !this.templates.has(d.dm_category)) {
-        this.templates.set(d.dm_category, o);
-        this.baseSizes.set(`tpl:${d.dm_category}`, sizes[d.dm_category]);
-      }
-    });
-  }
-
-  /** Merkt sich die Größe, mit der Blender die Objekte des geladenen GLB gebaut hat. */
-  rememberBaseSizes(data: Scene): void {
-    for (const o of data.objects) this.baseSizes.set(o.id, [...o.size] as [number, number, number]);
-  }
-
-  /**
-   * Gleicht die Möbel in der 3D-Ansicht mit den Szenendaten ab, ohne dass Blender neu baut:
-   * fehlende werden aus Vorlagen geklont, gelöschte entfernt, Lage, Größe und Farbe übernommen.
-   */
-  syncScene(data: Scene): void {
-    if (!this.root) return;
-    this.sceneData = data;
-    const wanted = new Set(data.objects.map((o) => o.id));
-    for (const [id, node] of [...this.nodes]) {
-      if (node.userData.dm_type === 'object' && !wanted.has(id)) this.removeNode(id);
-    }
-    for (const o of data.objects) {
-      let node = this.nodes.get(o.id);
-      if (!node) {
-        const tpl = this.templates.get(o.category) ?? this.templates.get('box');
-        if (!tpl) continue;
-        node = tpl.clone(true);
-        const tplKey = `${tpl.userData.dm_id}_main`;
-        node.traverse((c) => {
-          const mesh = c as THREE.Mesh;
-          if (!mesh.isMesh) return;
-          mesh.castShadow = mesh.receiveShadow = true;
-          mesh.geometry = mesh.geometry.clone();
-          mesh.material = Array.isArray(mesh.material)
-            ? mesh.material.map((m) => cloneMat(m, tplKey, o.id))
-            : cloneMat(mesh.material, tplKey, o.id);
-        });
-        node.userData = { ...tpl.userData, dm_id: o.id, dm_label: o.label };
-        this.baseSizes.set(o.id, this.baseSizes.get(`tpl:${o.category}`) ?? [...o.size] as [number, number, number]);
-        this.root.add(node);
-        this.nodes.set(o.id, node);
-      }
-      const base = this.baseSizes.get(o.id) ?? o.size;
-      node.position.copy(planToThree(o.position[0], o.position[1], o.position[2]));
-      node.rotation.set(0, THREE.MathUtils.degToRad(o.rotation), 0);
-      // Blender: Breite x, Tiefe y, Höhe z -> three.js: x, Höhe y, Tiefe z
-      node.scale.set(o.size[0] / base[0], o.size[2] / base[2], o.size[1] / base[1]);
-      this.setColor(o.id, o.color);
-    }
-    data.walls.forEach((w) => {
-      this.setColor(w.id, w.color);
-      w.panels.forEach((p) => this.setColor(p.id, p.color));
-    });
-    this.setColor('floor', data.floor.color);
-    this.setColor('ceiling', data.ceiling.color);
-    this.selectionBox?.update();
-  }
-
   screenshot(): string {
     this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
@@ -404,53 +334,6 @@ function toSelection(d: Record<string, any>): Selection {
     default:
       return null;
   }
-}
-
-/**
- * Lädt ein Modell als .glb. Eingebettetes glTF (JSON mit data:-Puffern) wird im Speicher in ein
- * GLB umgebaut, weil manche Hosts (z. B. Artifacts) fetch() auf data:-Adressen per CSP sperren.
- */
-async function fetchModel(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Modell konnte nicht geladen werden (${res.status})`);
-  const buf = await res.arrayBuffer();
-  if (new Uint8Array(buf, 0, 1)[0] !== 0x7b) return buf; // kein JSON -> schon GLB
-  const json = JSON.parse(new TextDecoder().decode(buf));
-  let bin = new Uint8Array(0);
-  const uri: string | undefined = json.buffers?.[0]?.uri;
-  if (uri?.startsWith('data:')) {
-    const raw = atob(uri.slice(uri.indexOf(',') + 1));
-    bin = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bin[i] = raw.charCodeAt(i);
-    delete json.buffers[0].uri;
-  }
-  const pad = (n: number) => (4 - (n % 4)) % 4;
-  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
-  const jp = pad(jsonBytes.length);
-  const bp = pad(bin.length);
-  const total = 12 + 8 + jsonBytes.length + jp + (bin.length ? 8 + bin.length + bp : 0);
-  const out = new Uint8Array(total);
-  const dv = new DataView(out.buffer);
-  dv.setUint32(0, 0x46546c67, true); // 'glTF'
-  dv.setUint32(4, 2, true);
-  dv.setUint32(8, total, true);
-  dv.setUint32(12, jsonBytes.length + jp, true);
-  dv.setUint32(16, 0x4e4f534a, true); // JSON
-  out.set(jsonBytes, 20);
-  out.fill(0x20, 20 + jsonBytes.length, 20 + jsonBytes.length + jp);
-  if (bin.length) {
-    const o = 20 + jsonBytes.length + jp;
-    dv.setUint32(o, bin.length + bp, true);
-    dv.setUint32(o + 4, 0x004e4942, true); // BIN
-    out.set(bin, o + 8);
-  }
-  return out.buffer;
-}
-
-function cloneMat(m: THREE.Material, tplKey: string, id: string): THREE.Material {
-  const c = m.clone();
-  if (m.name === tplKey) c.name = `${id}_main`;
-  return c;
 }
 
 function disposeTree(root: THREE.Object3D): void {

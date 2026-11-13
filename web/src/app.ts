@@ -39,15 +39,7 @@ export interface DemoData {
   title: string;
   scene: Scene;
   catalog: Catalog;
-  glbUrl: string;
-  libraryUrl: string;
   renderUrl?: string;
-}
-
-/** Teil der Szene, den nur Blender umbauen kann (Raumform, Höhe, Fenster/Türen, Paneele). */
-function geometryKey(s: Scene): string {
-  return JSON.stringify([s.room.polygon, s.room.height,
-    s.walls.map((w) => [w.thickness, w.openings, w.panels.map((p) => ({ ...p, color: '' }))])]);
 }
 
 export class App {
@@ -127,13 +119,9 @@ export class App {
   private async startDemo(d: DemoData): Promise<void> {
     this.catalog = d.catalog;
     this.elTitle.textContent = d.title;
-    this.showProgress('Raum wird geladen');
     try {
       this.scene = d.scene;
-      await this.viewer.load(d.glbUrl, d.scene, false);
-      this.viewer.rememberBaseSizes(d.scene);
-      await this.viewer.loadLibrary(d.libraryUrl, Object.fromEntries(
-        Object.entries(d.catalog.categories).map(([k, v]) => [k, v.size])));
+      this.viewer.setScene(d.scene, false);
       this.hideOverlay();
       this.select(null);
       this.setStatus('Demo: Änderungen bleiben im Browser');
@@ -143,9 +131,9 @@ export class App {
     }
   }
 
-  private demoNotice(text: string): void {
+  private demoNotice(text: string, title = 'Noch nicht verfügbar'): void {
     this.showOverlay(h('div', { class: 'dm-card' },
-      h('h2', {}, 'In der Demo nicht verfügbar'),
+      h('h2', {}, title),
       h('p', {}, text),
       h('div', { class: 'dm-row end' },
         h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Zurück zum Raum'))));
@@ -155,7 +143,7 @@ export class App {
 
   private showStart(): void {
     if (this.opts.demo) {
-      this.demoNotice('Für einen neuen Raum aus Video, Fotos oder Grundriss braucht es den Server mit KI-Analyse und Blender. Diese Demo zeigt die fertig analysierte Küche.');
+      this.demoNotice('Für einen neuen Raum aus Video, Fotos oder Grundriss braucht es den Server mit der KI-Analyse. Diese Demo zeigt die fertig analysierte Küche.');
       return;
     }
     let kind = 'video';
@@ -215,7 +203,7 @@ export class App {
   }
 
   private async create(kind: string, files: File[], hint: string): Promise<void> {
-    this.showProgress(kind === 'demo' ? 'Demo-Raum wird gebaut' : 'Dateien werden hochgeladen');
+    this.showProgress(kind === 'demo' ? 'Demo-Raum wird geladen' : 'Dateien werden hochgeladen');
     try {
       const { id } = await this.api.createProject(kind, files, hint);
       await this.openProject(id);
@@ -228,12 +216,12 @@ export class App {
     this.showProgress('Projekt wird geladen');
     try {
       let p = await this.api.project(id);
-      while (p.state === 'queued' || p.state === 'analyzing' || p.state === 'building') {
+      while (p.state === 'queued' || p.state === 'analyzing') {
         this.showProgress(p.step || 'Verarbeitung läuft');
         await sleep(1500);
         p = await this.api.project(id);
       }
-      if (p.state === 'error' || !p.scene || !p.glb_url) throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
+      if (p.state === 'error' || !p.scene) throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
       this.project = p;
       this.scene = p.scene;
       this.undoStack = [];
@@ -241,7 +229,7 @@ export class App {
       const url = new URL(location.href);
       url.searchParams.set(this.opts.projectParam ?? 'projekt', id);
       history.replaceState(null, '', url);
-      await this.viewer.load(this.api.url(p.glb_url), p.scene, false);
+      this.viewer.setScene(p.scene, false);
       this.hideOverlay();
       this.select(null);
       this.setStatus('Gespeichert');
@@ -254,52 +242,47 @@ export class App {
 
   /**
    * Übernimmt eine geänderte Szene.
-   * rebuild = true: Blender baut neu (neue Möbel, Maße, Paneele).
+   * rebuild = true: die 3D-Szene wird neu aufgebaut (neue Möbel, Maße, Paneele).
    * rebuild = false: der Editor hat die Änderung schon selbst angezeigt, es wird nur gespeichert.
    */
   private async apply(next: Scene, rebuild: boolean): Promise<void> {
     if (!this.scene) return;
-    if (this.opts.demo && geometryKey(next) !== geometryKey(this.scene)) {
-      this.toast('Maße, Fenster, Türen und Wandpaneele ändert Blender auf dem Server. In dieser Demo geht das noch nicht.');
-      this.renderPanel();
-      return;
-    }
     this.undoStack.push(this.scene);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack = [];
+    this.show(next, rebuild);
+  }
+
+  private show(next: Scene, rebuild: boolean): void {
     this.scene = next;
-    this.viewer.updateData(next);
+    if (rebuild) {
+      this.viewer.setScene(next, true);
+      this.renderPanel();
+    } else {
+      this.viewer.updateData(next);
+    }
     this.updateButtons();
-    if (rebuild) await this.persist(true);
-    else this.scheduleSave();
+    this.scheduleSave();
   }
 
   private scheduleSave(): void {
+    if (this.opts.demo) {
+      this.setStatus('Demo: Änderungen bleiben im Browser');
+      return;
+    }
     this.setStatus('Änderungen …');
     window.clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => this.persist(false), 700);
+    this.saveTimer = window.setTimeout(() => this.persist(), 700);
   }
 
-  private persist(reload: boolean): Promise<unknown> {
+  private persist(): Promise<unknown> {
     window.clearTimeout(this.saveTimer);
-    if (this.opts.demo) {
-      this.viewer.syncScene(this.scene!);
-      if (reload) this.renderPanel();
-      this.setStatus('Demo: Änderungen bleiben im Browser');
-      return Promise.resolve();
-    }
     const snapshot = this.scene!;
     const id = this.project!.id;
     this.saveChain = this.saveChain.then(async () => {
-      this.setBusy(+1, reload ? 'Blender baut …' : 'Speichern …');
+      this.setBusy(+1, 'Speichern …');
       try {
-        const p = await this.api.saveScene(id, snapshot);
-        this.project = p;
-        if (reload && p.glb_url && snapshot === this.scene) {
-          this.scene = p.scene!;
-          await this.viewer.load(this.api.url(p.glb_url), this.scene, true);
-          this.renderPanel();
-        }
+        this.project = await this.api.saveScene(id, snapshot);
         this.setStatus('Gespeichert');
       } catch (err) {
         this.setStatus('Fehler beim Speichern');
@@ -311,22 +294,18 @@ export class App {
     return this.saveChain;
   }
 
-  private async undo(): Promise<void> {
+  private undo(): void {
     const prev = this.undoStack.pop();
     if (!prev || !this.scene) return;
     this.redoStack.push(this.scene);
-    this.scene = prev;
-    this.updateButtons();
-    await this.persist(true);
+    this.show(prev, true);
   }
 
-  private async redo(): Promise<void> {
+  private redo(): void {
     const next = this.redoStack.pop();
     if (!next || !this.scene) return;
     this.undoStack.push(this.scene);
-    this.scene = next;
-    this.updateButtons();
-    await this.persist(true);
+    this.show(next, true);
   }
 
   private objectMoved(id: string, pos: [number, number, number], rot: number): void {
@@ -639,34 +618,15 @@ export class App {
 
   private async renderImage(): Promise<void> {
     const demo = this.opts.demo;
-    if (demo) {
-      if (!demo.renderUrl) return this.demoNotice('Das Foto-Rendering läuft mit Blender auf dem Server.');
+    if (demo?.renderUrl) {
       this.showOverlay(h('div', { class: 'dm-card wide' },
         h('img', { src: demo.renderUrl, class: 'dm-render', alt: 'Gerendertes Bild des Raums' }),
-        h('p', { class: 'dm-muted small' }, 'Vorab mit Blender gerendert, zeigt den Raum vor deinen Änderungen. Live-Rendering gibt es mit dem Server.'),
+        h('p', { class: 'dm-muted small' }, 'Vorab gerendertes Beispielbild, zeigt den Raum vor deinen Änderungen. Das KI-Rendering der aktuellen Ansicht ist in Arbeit.'),
         h('div', { class: 'dm-row end' },
           h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
       return;
     }
-    if (!this.project) return;
-    await this.saveChain;
-    this.showProgress('Blender rendert ein Foto deines Raums (ca. 1 Minute)');
-    try {
-      let p = await this.api.render(this.project.id);
-      while (p.render_state === 'running') {
-        await sleep(2000);
-        p = await this.api.project(this.project.id);
-      }
-      if (p.render_state !== 'ready' || !p.render_url) throw new Error(p.error || 'Rendern fehlgeschlagen');
-      const src = this.api.url(p.render_url);
-      this.showOverlay(h('div', { class: 'dm-card wide' },
-        h('img', { src, class: 'dm-render', alt: 'Gerendertes Bild des Raums' }),
-        h('div', { class: 'dm-row end' },
-          h('a', { class: 'dm-btn', href: src, download: 'raum.png' }, 'Herunterladen'),
-          h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
-    } catch (err) {
-      this.showError((err as Error).message);
-    }
+    this.demoNotice('Das fotorealistische KI-Rendering der aktuellen Ansicht ist in Arbeit.');
   }
 
   // ================================================================== Hilfen

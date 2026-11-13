@@ -1,8 +1,8 @@
 """Szenenformat (Version 1).
 
-Die Szene ist die einzige Quelle der Wahrheit. Blender baut daraus das 3D-Modell,
-der Browser-Editor ändert sie. Koordinaten in Metern, Grundriss in der x/y-Ebene,
-z zeigt nach oben (Blender-Konvention).
+Die Szene ist die einzige Quelle der Wahrheit. Der Browser-Editor baut daraus mit three.js
+das 3D-Modell (web/src/build.ts) und ändert sie. Koordinaten in Metern, Grundriss in der
+x/y-Ebene, z zeigt nach oben.
 
 - room.polygon: Innenkontur des Raums (Ecken gegen den Uhrzeigersinn).
 - walls[i] gehört zur Kante polygon[i] -> polygon[i+1].

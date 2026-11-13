@@ -66,14 +66,11 @@ export interface Scene {
 
 export interface Project {
   id: string;
-  state: 'queued' | 'analyzing' | 'building' | 'ready' | 'error' | 'unknown';
+  state: 'queued' | 'analyzing' | 'ready' | 'error' | 'unknown';
   step: string;
   error: string | null;
   version: number;
   scene: Scene | null;
-  glb_url: string | null;
-  render_url: string | null;
-  render_state: 'running' | 'ready' | 'error' | null;
 }
 
 export interface Catalog {

@@ -51,8 +51,4 @@ export class Api {
       body: JSON.stringify(scene),
     });
   }
-
-  render(id: string) {
-    return this.request<Project>(`/api/projects/${id}/render`, { method: 'POST' });
-  }
 }

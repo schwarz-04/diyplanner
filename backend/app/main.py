@@ -2,9 +2,7 @@
 
 Projekte liegen als Ordner unter DM_DATA_DIR/<projekt-id>/:
     inputs/       hochgeladene Videos, Fotos, Grundrisse
-    scene.json    aktuelle Szene (Quelle der Wahrheit)
-    scene.glb     von Blender gebautes 3D-Modell
-    render.png    letztes fotorealistisches Bild (optional)
+    scene.json    aktuelle Szene (Quelle der Wahrheit, der Editor baut daraus die 3D-Ansicht)
     status.json   Stand der Verarbeitung
 
 Die Projekt-ID ist lang und zufällig und dient vorerst als Zugangsschlüssel (Teilen-Link).
@@ -15,15 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import multiprocessing
 import os
 import shutil
-import sys
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,44 +35,12 @@ DATA_DIR = Path(os.environ.get("DM_DATA_DIR", ROOT / "data" / "projects"))
 WEB_DIST = Path(os.environ.get("DM_WEB_DIST", ROOT / "web" / "dist"))
 MAX_UPLOAD_MB = int(os.environ.get("DM_MAX_UPLOAD_MB", "600"))
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("DM_ALLOWED_ORIGINS", "*").split(",") if o.strip()]
-RENDER_SAMPLES = int(os.environ.get("DM_RENDER_SAMPLES", "64"))
 ALLOWED_EXT = analysis.VIDEO_EXT | analysis.IMAGE_EXT | {".pdf"}
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="DIY Mamis 3D", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
-
-# --------------------------------------------------------------------------- Blender-Prozess
-# bpy ist nicht threadsicher und braucht einige Sekunden zum Laden. Ein eigener Prozess
-# hält Blender geladen und baut die Szenen nacheinander.
-
-
-def _worker_init() -> None:
-    sys.path.insert(0, str(ROOT / "blender"))
-    import build_scene  # noqa: F401  (lädt bpy einmalig)
-
-
-def _worker_build(scene: dict, glb: Optional[str], png: Optional[str], samples: int) -> None:
-    import build_scene
-
-    build_scene.build(scene, glb, png, samples=samples)
-
-
-_ctx = multiprocessing.get_context("spawn")
-build_pool = ProcessPoolExecutor(max_workers=1, mp_context=_ctx, initializer=_worker_init)
-render_pool = ProcessPoolExecutor(max_workers=1, mp_context=_ctx, initializer=_worker_init)
-
-
-async def run_build(scene: Scene, glb: Path, png: Optional[Path] = None) -> None:
-    loop = asyncio.get_running_loop()
-    pool = render_pool if png else build_pool
-    tmp = glb.with_suffix(".tmp.glb") if glb else None
-    await loop.run_in_executor(pool, _worker_build, scene.model_dump(), str(tmp) if tmp else None,
-                               str(png) if png else None, RENDER_SAMPLES)
-    if tmp:
-        tmp.replace(glb)
-
 
 # --------------------------------------------------------------------------- Projekte
 
@@ -123,14 +85,7 @@ def project_payload(pid: str) -> dict:
         "error": status.get("error"),
         "version": status.get("version", 0),
         "scene": json.loads(scene_file.read_text()) if scene_file.exists() else None,
-        "glb_url": None,
-        "render_url": None,
-        "render_state": status.get("render_state"),
     }
-    if (path / "scene.glb").exists():
-        payload["glb_url"] = f"/api/projects/{pid}/files/scene.glb?v={payload['version']}"
-    if (path / "render.png").exists():
-        payload["render_url"] = f"/api/projects/{pid}/files/render.png?v={status.get('render_version', 0)}"
     return payload
 
 
@@ -144,8 +99,6 @@ async def process_project(pid: str, kind: str, hint: str) -> None:
             files = sorted((path / "inputs").iterdir())
             scene = await asyncio.to_thread(analysis.analyze, files, kind, hint)
         save_scene(path, scene)
-        write_status(path, state="building", step="Blender baut die 3D-Szene")
-        await run_build(scene, path / "scene.glb")
         write_status(path, state="ready", step="")
     except Exception as exc:  # Fehler für den Nutzer sichtbar machen
         log.exception("Projekt %s fehlgeschlagen", pid)
@@ -212,35 +165,12 @@ async def update_scene(pid: str, scene: Scene) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     save_scene(path, scene)
-    await run_build(scene, path / "scene.glb")
-    return project_payload(pid)
-
-
-async def _render(pid: str) -> None:
-    path = DATA_DIR / pid
-    try:
-        scene = Scene.model_validate_json((path / "scene.json").read_text())
-        await run_build(scene, None, path / "render.png.tmp.png")
-        (path / "render.png.tmp.png").replace(path / "render.png")
-        write_status(path, render_state="ready", render_version=read_status(path).get("render_version", 0) + 1)
-    except Exception as exc:
-        log.exception("Rendern fehlgeschlagen")
-        write_status(path, render_state="error", error=str(exc))
-
-
-@app.post("/api/projects/{pid}/render")
-async def render(pid: str) -> dict:
-    path = project_dir(pid)
-    if read_status(path).get("render_state") == "running":
-        return project_payload(pid)
-    write_status(path, render_state="running")
-    asyncio.create_task(_render(pid))
     return project_payload(pid)
 
 
 @app.get("/api/projects/{pid}/files/{name}")
 def project_file(pid: str, name: str) -> FileResponse:
-    if name not in {"scene.glb", "render.png", "scene.json"}:
+    if name != "scene.json":
         raise HTTPException(404)
     f = project_dir(pid) / name
     if not f.exists():
