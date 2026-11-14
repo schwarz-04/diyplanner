@@ -78,6 +78,8 @@ export class App {
   private tool: Tool = 'select';
   private showDims = true;
   private showcase: Showcase | null = null;
+  /** Farbverlauf unten im 3D-Hintergrund (Test) */
+  private gradient = (() => { try { return localStorage.getItem('dm3d_gradient') !== '0'; } catch { return true; } })();
   private products: ShopProduct[] = [];
   /** Werkzeuge aus der Produktliste (Kategorie Werkzeug) */
   private toolProducts: ShopProduct[] = [];
@@ -345,6 +347,7 @@ export class App {
       this.elOverlay.classList.add('dm-showcase');
       this.viewer.zoomOut = this.elCanvas.clientWidth <= 760 ? 1.35 : 1;
       this.showcase.start();
+      this.applyTheme();
       requestAnimationFrame(() => this.updateShift());
     } catch {
       /* ohne Beispielraum bleibt der Hintergrund schlicht */
@@ -357,6 +360,7 @@ export class App {
     this.viewer.zoomOut = 1;
     this.elOverlay.classList.remove('dm-showcase');
     this.updateShift();
+    this.applyTheme();
   }
 
   /** Raum in den freien Teil des Bildes schieben (neben die Startkarte bzw. über das offene Menü). */
@@ -913,6 +917,13 @@ export class App {
         !u.name && u.loginUrl && h('a', { class: 'dm-btn primary', href: u.loginUrl }, 'Anmelden')),
       h('h4', {}, 'Darstellung'),
       h('div', { class: 'dm-tabs', style: 'margin-top:0' }, themeBtn('light', 'Hell'), themeBtn('dark', 'Dunkel'), themeBtn('auto', 'Automatisch')),
+      h('label', { class: 'dm-check', style: 'margin-top:8px' },
+        h('input', { type: 'checkbox', checked: this.gradient, onchange: (e: Event) => {
+          this.gradient = (e.target as HTMLInputElement).checked;
+          try { localStorage.setItem('dm3d_gradient', this.gradient ? '1' : '0'); } catch { /* egal */ }
+          this.applyTheme();
+        } }),
+        ' Farbverlauf im Hintergrund'),
       this.version && h('p', { class: 'dm-muted small' }, `Raumplaner Version ${this.version}`),
     ];
   }
@@ -921,7 +932,7 @@ export class App {
     const dark = this.theme === 'dark' || (this.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
     this.root.classList.toggle('dm-dark', dark);
     document.documentElement.classList.toggle('dm3d-dark', dark);
-    this.viewer?.setDark(dark);
+    this.viewer?.setDark(dark, !this.scene || this.gradient);
   }
 
   // ------------------------------------------------------------------ Listen rechts (Speichern, Merkliste, Einkaufsliste, Rendering)

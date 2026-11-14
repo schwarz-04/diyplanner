@@ -415,8 +415,28 @@ export class Viewer {
     this.updateHandles();
   }
 
-  setDark(dark: boolean): void {
-    (this.scene.background as THREE.Color).set(dark ? '#1f1d1b' : '#f4f1ec');
+  setDark(dark: boolean, gradient = false): void {
+    const top = dark ? '#1f1d1b' : '#f4f1ec';
+    const old = this.scene.background;
+    if (old instanceof THREE.Texture) old.dispose();
+    if (!gradient) {
+      this.scene.background = new THREE.Color(top);
+      return;
+    }
+    // Verlauf nur im unteren Bereich
+    const c = document.createElement('canvas');
+    c.width = 2;
+    c.height = 512;
+    const g = c.getContext('2d')!;
+    const grad = g.createLinearGradient(0, 0, 0, c.height);
+    grad.addColorStop(0, top);
+    grad.addColorStop(0.45, top);
+    grad.addColorStop(1, dark ? '#58524d' : '#ddcfc7');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, c.width, c.height);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.scene.background = tex;
   }
 
   /** Hinein- (factor < 1) oder herauszoomen. Beim Begehen ändert sich der Blickwinkel. */
