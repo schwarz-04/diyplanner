@@ -61,6 +61,8 @@ export interface SceneObject {
   size: [number, number, number];
   color: string;
   product?: Product | null;
+  /** Aus der Einkaufsliste genommen (z. B. schon vorhanden) */
+  skipShop?: boolean;
 }
 
 export interface Surface {

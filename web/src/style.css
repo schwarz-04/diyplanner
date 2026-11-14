@@ -539,3 +539,26 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-sheet .dm-render { margin-bottom: 6px; }
 .dm-app .dm-shoplist-total { margin: 8px 0 4px; }
 .dm-app .dm-favlink img, .dm-app .dm-favlink .dm-product-ph { background: var(--dm-soft2); }
+
+/* ================================================================== v0.11: Fenster eckig mit Schatten, Seitenmenü halbtransparent */
+.dm-app.dm-wide .dm-side { position: relative; z-index: 5; overflow: visible; }
+.dm-app.dm-wide .dm-pop {
+  position: absolute; left: 100%; top: 0; bottom: 0; height: auto; width: 304px;
+  background: var(--dm-plan-bg); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-right: 1px solid var(--dm-border); box-shadow: 4px 0 18px rgba(0,0,0,.14);
+  display: flex; flex-direction: column;
+}
+.dm-app.dm-wide .dm-pop[hidden] { display: none; }
+.dm-app.dm-wide .dm-pop .dm-pop-body { flex: 1; min-height: 0; }
+.dm-app.dm-wide.dm-panel-open .dm-zoom { left: 316px; }
+.dm-app.dm-wide .dm-sheet, .dm-app.dm-wide .dm-plan, .dm-app .dm-sheet {
+  border-radius: 0; box-shadow: 0 4px 16px rgba(0,0,0,.16);
+}
+.dm-app.dm-wide .dm-sheet { background: var(--dm-plan-bg); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.dm-app .dm-pop .dm-product, .dm-app .dm-pop .dm-input { background: var(--dm-glass); }
+.dm-app .dm-tools { flex: 0 0 auto; }
+.dm-app .dm-tools .dm-sheet-head strong { display: inline-flex; align-items: center; gap: 4px; }
+.dm-app .dm-tools .dm-sheet-head .dm-icon { width: 16px; height: 16px; color: var(--dm-accent); }
+.dm-app .dm-toollist { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.dm-app .dm-toollist a { color: var(--dm-accent); font-weight: 600; }
+.dm-app .dm-sheet .dm-btn .dm-icon { width: 15px; height: 15px; vertical-align: -3px; }

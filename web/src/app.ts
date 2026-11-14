@@ -2,6 +2,7 @@ import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
+import { TOOL_SETS, type Tool as DiyTool, type ToolContext } from './tools';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
@@ -106,6 +107,9 @@ export class App {
   private elToolbar = h('div', { class: 'dm-floating', hidden: true });
   private elPlan = h('div', { class: 'dm-plan' });
   private elSheet = h('div', { class: 'dm-sheet', hidden: true });
+  private elTools = h('div', { class: 'dm-sheet dm-tools', hidden: true });
+  /** Werkzeugliste für diese Auswahl weggeklickt */
+  private toolsDismissed = '';
   private elPlanHead = h('div', { class: 'dm-plan-head' });
   private elPlanBody = h('div', { class: 'dm-plan-body' });
   private elVersion = h('div', { class: 'dm-version' });
@@ -140,7 +144,7 @@ export class App {
             h('button', { class: 'dm-round', title: 'Hineinzoomen', onclick: () => this.viewer.zoom(0.8) }, '+'),
             h('button', { class: 'dm-round', title: 'Herauszoomen', onclick: () => this.viewer.zoom(1.25) }, '−'),
             h('button', { class: 'dm-round', title: 'Ganzen Raum zeigen', onclick: () => this.viewer.frame(false) }, icon(ICON_FIT)))),
-        h('aside', { class: 'dm-right' }, this.elSheet, this.elPlan)),
+        h('aside', { class: 'dm-right' }, this.elSheet, this.elTools, this.elPlan)),
       this.elOverlay,
       this.elCaption,
     );
@@ -780,6 +784,61 @@ export class App {
     this.renderFloating();
   }
 
+  // ------------------------------------------------------------------ Werkzeuge
+
+  /** Welche Arbeit steht für die Auswahl an? */
+  private toolContext(): ToolContext | null {
+    const sel = this.selection;
+    const s = this.scene;
+    if (!sel || !s) return null;
+    if (sel.kind === 'panel') return 'paneel';
+    if (sel.kind === 'wall') return 'farbe';
+    if (sel.kind !== 'object') return null;
+    const o = s.objects.find((x) => x.id === sel.id);
+    return o ? this.objectToolContext(o) : null;
+  }
+
+  private objectToolContext(o: SceneObject): ToolContext | null {
+    const cat = this.catalog.categories[o.category];
+    if (o.category === 'shelf' || o.category === 'wall_shelf') return 'regal';
+    if (cat?.mount === 'wall') return 'wand';
+    if (cat?.group === 'deko' || ['rug', 'plant', 'lamp'].includes(o.category)) return null;
+    return 'moebel';
+  }
+
+  private renderTools(): void {
+    const ctx = this.wide ? this.toolContext() : null;
+    const sel = this.selection;
+    const key = ctx && sel ? `${ctx}|${'id' in sel ? sel.id : sel.kind}` : '';
+    if (key !== this.toolsDismissed) this.toolsDismissed = '';
+    if (!ctx || key === this.toolsDismissed) {
+      this.elTools.hidden = true;
+      this.elTools.replaceChildren();
+      return;
+    }
+    const set = TOOL_SETS[ctx];
+    this.elTools.hidden = false;
+    this.elTools.replaceChildren(
+      h('div', { class: 'dm-sheet-head' }, h('strong', {}, icon(ICON_TOOL), ' Werkzeuge: ', set.title),
+        h('button', { class: 'dm-btn ghost small', title: 'Ausblenden', onclick: () => { this.toolsDismissed = key; this.renderTools(); } }, '✕')),
+      h('div', { class: 'dm-sheet-body' }, h('ul', { class: 'dm-toollist' }, set.tools.map((t) => this.toolRow(t)))));
+  }
+
+  private toolRow(t: DiyTool): HTMLElement {
+    const name = t.url ? h('a', { href: this.shopLink(t.url), target: '_blank', rel: 'sponsored noopener' }, t.name) : h('strong', {}, t.name);
+    return h('li', {}, name, t.note ? h('span', { class: 'dm-muted small' }, ` · ${t.note}`) : '');
+  }
+
+  /** Alle Werkzeuge für das ganze Projekt (für die PDF-Einkaufsliste). */
+  private projectTools(): { title: string; tools: DiyTool[] }[] {
+    const ctxs = new Set<ToolContext>();
+    for (const r of this.home?.rooms ?? []) {
+      for (const o of r.scene.objects) { const c = this.objectToolContext(o); if (c) ctxs.add(c); }
+      if (r.scene.walls.some((w) => w.panels?.length)) ctxs.add('paneel');
+    }
+    return [...ctxs].map((c) => TOOL_SETS[c]);
+  }
+
   /** Früherer Name, wird an vielen Stellen nach Änderungen aufgerufen. */
   private renderPanel(): void {
     this.renderMenu();
@@ -897,6 +956,7 @@ export class App {
     this.root.classList.toggle('dm-panel-open', !!this.menu && !!s);
     this.renderPlan();
     if (this.sheet === 'shop' && this.wide) this.renderSheet();
+    this.renderTools();
     this.renderDock();
     this.elPop.replaceChildren();
     this.elPop.hidden = !this.menu || !s;
@@ -1000,7 +1060,8 @@ export class App {
         list.length > 0 && h('p', { class: 'dm-muted small' }, 'Ein Klick öffnet das Produkt im Shop (neuer Tab).'),
         this.amazonTag && list.some((f) => f.source === 'amazon') && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
       ],
-      actions: list.length ? [h('button', { class: 'dm-btn small', onclick: () => { if (!this.wide) this.closeSheet(); this.furnTab = 'favs'; this.shopFilter = 'all'; this.productQuery = ''; this.furnAdd = true; this.openMenu('furniture'); } }, 'Gemerkte in den Raum einfügen')] : [],
+      actions: list.length ? [h('button', { class: 'dm-btn small', onclick: () => this.printList('favs', list.map((f) => ({ name: f.name, url: f.url, image: f.image, source: f.source, price: f.price }))) }, icon(ICON_PDF), ' Als PDF'),
+        h('button', { class: 'dm-btn small', onclick: () => { if (!this.wide) this.closeSheet(); this.furnTab = 'favs'; this.shopFilter = 'all'; this.productQuery = ''; this.furnAdd = true; this.openMenu('furniture'); } }, 'Gemerkte in den Raum einfügen')] : [],
     };
   }
 
@@ -1566,12 +1627,14 @@ export class App {
   private shopSheet(): SheetContent | null {
     if (!this.home) return null;
     // Gleiche Produkte zusammenfassen (Anzahl), Räume dazuschreiben
-    const groups = new Map<string, { p: Product; label: string; count: number; rooms: Set<string> }>();
+    const groups = new Map<string, { key: string; p: Product; label: string; count: number; rooms: Set<string> }>();
+    let hidden = 0;
     this.home.rooms.forEach((r, i) => {
       for (const o of r.scene.objects) {
         if (!o.product?.url) continue;
+        if (o.skipShop) { hidden++; continue; }
         const key = `${o.product.url}|${o.product.variant ?? ''}`;
-        const g = groups.get(key) ?? { p: o.product, label: o.label || o.product.name, count: 0, rooms: new Set<string>() };
+        const g = groups.get(key) ?? { key, p: o.product, label: o.label || o.product.name, count: 0, rooms: new Set<string>() };
         g.count++;
         g.rooms.add(r.scene.room.name || `Raum ${i + 1}`);
         groups.set(key, g);
@@ -1594,16 +1657,75 @@ export class App {
                 h('span', { class: 'dm-muted small' }, [
                   SHOP_LABEL[g.p.source], g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '',
                   g.p.price != null ? euro(g.p.price * g.count) : 'Preis im Shop', [...g.rooms].join(', '),
-                ].filter(Boolean).join(' · ')))))))
+                ].filter(Boolean).join(' · ')))),
+            h('button', { class: 'dm-btn small ghost', title: 'Aus der Einkaufsliste nehmen (bleibt im Raum)', onclick: () => this.setSkipShop(g.key, true) }, '✕'))))
           : h('p', { class: 'dm-muted small' }, 'Noch keine Produkte im Projekt. Unter „Möbel“ findest du Produkte oder fügst eines per Link ein.'),
         rows.length > 0 && (priced.length
           ? h('p', { class: 'dm-shoplist-total' }, h('strong', {}, `Summe: ${euro(total)}`),
             missing ? h('span', { class: 'dm-muted small' }, ` plus ${missing} Produkt${missing > 1 ? 'e' : ''} ohne Preisangabe`) : '')
           : h('p', { class: 'dm-muted small' }, 'Für diese Produkte ist kein Preis hinterlegt, den aktuellen Preis zeigt der Shop.')),
         priced.length > 0 && h('p', { class: 'dm-muted small' }, 'Preise wie hinterlegt, der aktuelle Preis steht im Shop.'),
+        hidden > 0 && h('p', { class: 'dm-muted small' }, `${hidden} Produkt${hidden > 1 ? 'e' : ''} ausgeblendet. `,
+          h('button', { class: 'dm-link', onclick: () => this.setSkipShop(null, false) }, 'Wieder anzeigen')),
         amazon && this.amazonTag && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
       ],
+      actions: rows.length ? [h('button', { class: 'dm-btn small', onclick: () => this.printList('shop', rows.map((g) => ({
+        name: g.label, url: g.p.url, image: g.p.image, source: g.p.source, price: g.p.price, count: g.count,
+        variant: g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '', rooms: [...g.rooms].join(', '),
+      })), total, missing) }, icon(ICON_PDF), ' Als PDF')] : [],
     };
+  }
+
+  /** Produkt aus der Einkaufsliste nehmen oder alle wieder aufnehmen (key = null). */
+  private setSkipShop(key: string | null, skip: boolean): void {
+    if (!this.home) return;
+    const next: Home = structuredClone(this.home);
+    for (const r of next.rooms) for (const o of r.scene.objects) {
+      if (!o.product?.url) continue;
+      if (key === null || `${o.product.url}|${o.product.variant ?? ''}` === key) o.skipShop = skip || undefined;
+    }
+    this.applyHome(next, false);
+    this.renderSheet();
+  }
+
+  /** Liste als druckbare Seite öffnen, dort „Als PDF speichern“. */
+  private printList(kind: 'shop' | 'favs', rows: PrintRow[], total = 0, missing = 0): void {
+    const esc = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+    const title = kind === 'shop' ? 'Einkaufsliste' : 'Merkliste';
+    const project = this.project?.name || this.scene?.room.name || 'Raumplaner';
+    const date = new Date().toLocaleDateString('de-DE');
+    const items = rows.map((r) => {
+      const link = this.shopLink(r.url);
+      const meta = [SHOP_LABEL[r.source], r.variant, r.rooms].filter(Boolean).join(' · ');
+      return `<tr><td class="img">${r.image ? `<img src="${esc(r.image)}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">` : ''}</td>
+        <td><strong>${r.count && r.count > 1 ? `${r.count} × ` : ''}${esc(r.name)}</strong><br><span class="m">${esc(meta)}</span><br><a href="${esc(link)}">${esc(link)}</a></td>
+        <td class="p">${r.price != null ? esc(euro(r.price * (r.count ?? 1))) : '<span class="m">Preis im Shop</span>'}</td></tr>`;
+    }).join('');
+    const sum = kind === 'shop' && total > 0
+      ? `<p class="sum">Summe: ${esc(euro(total))}${missing ? ` <span class="m">plus ${missing} ohne Preisangabe</span>` : ''}</p>` : '';
+    const tools = kind === 'shop' ? this.projectTools() : [];
+    const toolHtml = tools.length ? `<h2>Werkzeuge</h2>${tools.map((t) => `<h3>${esc(t.title)}</h3><ul>${t.tools.map((x) =>
+      `<li><strong>${esc(x.name)}</strong>${x.note ? ` <span class="m">· ${esc(x.note)}</span>` : ''}</li>`).join('')}</ul>`).join('')}` : '';
+    const amazon = this.amazonTag && rows.some((r) => r.source === 'amazon') ? '<p class="m">Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.</p>' : '';
+    const html = `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>${esc(title)} – ${esc(project)}</title><style>
+      body{font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;color:#2b2724;margin:28px}
+      h1{font-size:22px;margin:0}h2{font-size:16px;margin:24px 0 6px}h3{font-size:13px;margin:12px 0 4px}
+      .m{color:#7a716b;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:14px}
+      td{border-bottom:1px solid #e6e0da;padding:8px 6px;vertical-align:top}td.img{width:64px}td.img img{width:60px;height:60px;object-fit:contain}
+      td.p{text-align:right;white-space:nowrap}a{color:#b8456f;font-size:11px;word-break:break-all}.sum{text-align:right;font-size:15px;font-weight:600}
+      ul{margin:0;padding-left:18px}@media print{body{margin:12mm}.noprint{display:none}}
+      .noprint{margin-bottom:16px}button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid #c9bfb7;background:#fff;cursor:pointer}
+    </style></head><body>
+      <div class="noprint"><button onclick="print()">Als PDF speichern / drucken</button></div>
+      <h1>${esc(title)}</h1><p class="m">${esc(project)} · ${esc(date)} · DIY Mamis Raumplaner</p>
+      <table>${items}</table>${sum}${toolHtml}${amazon}
+      <script>window.addEventListener('load',function(){setTimeout(function(){print()},300)});<\/script>
+    </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { this.toast('Bitte Pop-ups für diese Seite erlauben, dann klappt der PDF-Download.'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
   }
 
   // ------------------------------------------------------------------ Möbel anpassen
@@ -2025,6 +2147,11 @@ function shopOf(url: string): Product['source'] {
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
 interface SheetContent { title: string; body: Child[]; actions?: Child[] }
+
+interface PrintRow { name: string; url: string; image?: string; source: Product['source']; price?: number | null; count?: number; variant?: string; rooms?: string }
+
+const ICON_TOOL = '<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>';
+const ICON_PDF = '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M12 11v6M9.5 14.5L12 17l2.5-2.5"/>';
 
 type FurnTab = 'favs' | 'regale' | 'moebel' | 'deko' | 'formen';
 
