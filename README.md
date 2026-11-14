@@ -63,6 +63,12 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    Summe. In den Einstellungen eingetragen, wird der Amazon-Partner-Tag an alle Amazon-Links gehängt.
    Nutzer können außerdem eigene Produkte per Link einfügen und die Maße selbst eintragen.
 
+   Viele Produkte auf einmal: *Raumplaner-Produkte → Tabelle importieren* nimmt eine Excel- (.xlsx) oder
+   CSV-Datei mit den Spalten `Kategorie, Produktname, Produktlink, Höhe (cm), Breite (cm), Tiefe (cm),
+   Farbvarianten, Bild-URL` (optional `Preis`). Die Kategorie wählt das 3D-Modell (z. B. Sofa, Regal,
+   Wandregal, Tischlampe), Farbnamen werden in Farbtöne übersetzt (eigene mit `Salbei #a9b9a6`).
+   Gibt es mehrere Farbvarianten, wählen Nutzer sie im Raumplaner aus. Gleicher Produktlink = Update.
+
 Neue Räume können standardmäßig nur angemeldete Nutzer anlegen, weil jede Analyse KI-Guthaben
 kostet (grob 15–30 Cent). Das lässt sich in den Einstellungen abschalten. Bearbeiten kann jeder,
 der den Projekt-Link kennt.

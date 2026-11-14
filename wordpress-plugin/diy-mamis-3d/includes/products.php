@@ -26,6 +26,7 @@ class DM3D_Products
         'depth' => ['Tiefe in cm', 'number'],
         'height' => ['Höhe in cm', 'number'],
         'color' => ['Farbe', 'color'],
+        'variants' => ['Farbvarianten', 'variants'],
     ];
 
     public static function init(): void
@@ -88,6 +89,11 @@ class DM3D_Products
                         ($c['group'] ?? '') === 'deko' ? ' (Deko)' : '');
                 }
                 echo '</select><p class="description">Bestimmt die Form des 3D-Modells. Größe und Farbe kommen aus den Feldern unten.</p>';
+            } elseif ($type === 'variants') {
+                $list = json_decode($value, true);
+                $text = is_array($list) ? implode(', ', array_map(function ($v) { return $v['name'] . ' ' . $v['color']; }, $list)) : '';
+                printf('<input type="text" name="dm3d_%s" id="dm3d_%s" value="%s" class="large-text">', esc_attr($key), esc_attr($key), esc_attr($text));
+                echo '<p class="description">Mit Komma trennen, z. B. <code>weiß, Eiche, Salbei #a9b9a6</code>. Die erste Variante ist die Standardfarbe. Leer lassen = nur die Farbe oben.</p>';
             } else {
                 $html_type = ['url' => 'url', 'number' => 'number', 'color' => 'color'][$type];
                 $extra = $type === 'number' ? ' step="0.01" min="0"' : '';
@@ -116,6 +122,13 @@ class DM3D_Products
             if ($type === 'url') $value = esc_url_raw(trim((string) $raw));
             elseif ($type === 'number') $value = $raw === '' ? '' : (string) max(0, (float) str_replace(',', '.', (string) $raw));
             elseif ($type === 'color') $value = sanitize_hex_color((string) $raw) ?: '';
+            elseif ($type === 'variants') {
+                $raw = sanitize_text_field((string) $raw);
+                $list = $raw === '' ? [] : DM3D_Import::parse_variants($raw, sanitize_hex_color((string) ($_POST['dm3d_color'] ?? '')) ?: '#c9b8a0');
+                $value = $list ? wp_slash(wp_json_encode($list, JSON_UNESCAPED_UNICODE)) : '';
+                // Erste Variante = Standardfarbe
+                if ($list) update_post_meta($post_id, '_dm3d_color', $list[0]['color']);
+            }
             else $value = sanitize_key((string) $raw);
             update_post_meta($post_id, '_dm3d_' . $key, $value);
         }
@@ -152,6 +165,13 @@ class DM3D_Products
             $size[] = $v > 0 ? round($v / 100, 3) : $def[$i];
         }
         $url = $m('url');
+        $color = $m('color') ?: ($cats[$cat]['color'] ?? '#c9b8a0');
+        $variants = [];
+        foreach ((array) json_decode($m('variants'), true) as $v) {
+            if (is_array($v) && !empty($v['name']) && !empty($v['color'])) {
+                $variants[] = ['name' => (string) $v['name'], 'color' => (string) $v['color']];
+            }
+        }
         return [
             'id' => (string) $id,
             'name' => get_the_title($id),
@@ -161,7 +181,8 @@ class DM3D_Products
             'price' => $m('price') !== '' ? (float) $m('price') : null,
             'category' => $cat,
             'size' => $size,
-            'color' => $m('color') ?: ($cats[$cat]['color'] ?? '#c9b8a0'),
+            'color' => $variants[0]['color'] ?? $color,
+            'variants' => $variants ?: [['name' => 'Standard', 'color' => $color]],
         ];
     }
 

@@ -837,7 +837,11 @@ export class App {
       const o = s.objects.find((x) => x.id === sel.id);
       if (!o) return null;
       return { name: o.label || 'Möbel', color: o.color, palette: FURNITURE_COLORS,
-        apply: (c) => this.recolor(o.id, c, (n) => (n.objects.find((x) => x.id === o.id)!.color = c)) };
+        apply: (c) => this.recolor(o.id, c, (n) => {
+          const x = n.objects.find((y) => y.id === o.id)!;
+          x.color = c;
+          if (x.product?.variants) x.product.variant = x.product.variants.find((v) => v.color.toLowerCase() === c.toLowerCase())?.name;
+        }) };
     }
     if (sel?.kind === 'wall') {
       const i = wallIndex(s, sel.id);
@@ -869,8 +873,10 @@ export class App {
     if (!t) return [h('p', { class: 'dm-muted' }, 'Bitte etwas auswählen.')];
     const pick = (c: string) => { t.apply(c); this.renderMenu(); };
     const sel = this.selection;
+    const obj = sel?.kind === 'object' ? this.scene!.objects.find((x) => x.id === sel.id) : undefined;
     return [
       h('p', {}, 'Farbe für ', h('strong', {}, t.name), sel ? '' : ' (oder tippe etwas im Bild an)'),
+      obj && this.variantPicker(obj),
       !sel && h('div', { class: 'dm-row', style: 'margin-bottom:10px' },
         h('button', { class: 'dm-btn small', onclick: () => this.viewer.setSelection({ kind: 'floor' }, true) }, 'Boden'),
         h('button', { class: 'dm-btn small', onclick: () => this.viewer.setSelection({ kind: 'ceiling' }, true) }, 'Decke')),
@@ -901,8 +907,28 @@ export class App {
       p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
       h('div', { class: 'dm-product-text' },
         h('strong', {}, p.name || 'Produkt'),
-        h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
+        h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.variant && (p.variants?.length ?? 0) > 1 ? p.variant : '', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
       h('a', { class: 'dm-btn small', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener' }, 'Zum Shop'));
+  }
+
+  /** Farbvarianten eines Produkts als Auswahl (nur wenn es mehrere gibt). */
+  private variantPicker(o: SceneObject): HTMLElement | null {
+    const vs = o.product?.variants;
+    if (!vs || vs.length < 2) return null;
+    const current = o.product?.variant ?? vs.find((v) => v.color.toLowerCase() === o.color.toLowerCase())?.name;
+    return h('div', { class: 'dm-field' },
+      h('span', {}, 'Farbvariante'),
+      h('div', { class: 'dm-variants' }, vs.map((v) => h('button', {
+        class: `dm-chip dm-variant${v.name === current ? ' active' : ''}`,
+        onclick: () => {
+          this.recolor(o.id, v.color, (n) => {
+            const x = n.objects.find((y) => y.id === o.id)!;
+            x.color = v.color;
+            if (x.product) x.product.variant = v.name;
+          });
+          this.renderMenu();
+        },
+      }, h('i', { style: `background:${v.color}` }), v.name))));
   }
 
   private productSection(): Child[] {
@@ -934,7 +960,9 @@ export class App {
         p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
         h('div', { class: 'dm-product-text' },
           h('strong', {}, p.name),
-          h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.size.map((v) => Math.round(v * 100)).join(' × ') + ' cm', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
+          h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.size.map((v) => Math.round(v * 100)).join(' × ') + ' cm', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · ')),
+          (p.variants?.length ?? 0) > 1 && h('span', { class: 'dm-dots', title: p.variants!.map((v) => v.name).join(', ') },
+            p.variants!.slice(0, 8).map((v) => h('i', { style: `background:${v.color}` })))),
         h('span', { class: 'dm-product-add' }, '+')))
         : h('p', { class: 'dm-muted small' }, 'Nichts gefunden.'));
   }
@@ -943,8 +971,11 @@ export class App {
     this.addObject(p.category, {
       label: p.name,
       size: [...p.size] as [number, number, number],
-      color: p.color,
-      product: { source: p.source, name: p.name, url: p.url, sku: '', image: p.image || undefined, price: p.price, catalog_id: p.id },
+      color: p.variants?.[0]?.color ?? p.color,
+      product: {
+        source: p.source, name: p.name, url: p.url, sku: '', image: p.image || undefined, price: p.price, catalog_id: p.id,
+        ...((p.variants?.length ?? 0) > 1 ? { variants: p.variants, variant: p.variants![0].name } : {}),
+      },
     });
     this.toast(`${p.name} eingefügt`);
   }
@@ -1058,6 +1089,7 @@ export class App {
         field('Drehung', numberInput(Math.round(o.rotation), -360, 720, (v) => update((x) => (x.rotation = ((v % 360) + 360) % 360), true), '°')),
         field('Über Boden', numberInput(cm(o.position[2]), 0, 300, (v) => update((x) => (x.position[2] = m(v)), true), 'cm'))),
       o.product?.url && this.productCard(o.product),
+      this.variantPicker(o),
       field('Produkt-Link (IKEA, Amazon …)', h('input', {
         class: 'dm-input', type: 'url', placeholder: 'https://…', value: o.product?.url ?? '',
         onchange: (e: Event) => update((x) => {

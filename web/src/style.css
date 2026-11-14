@@ -276,3 +276,11 @@ body.dm3d-vollbild { margin: 0; padding: 0; background: #faf8f5; overflow: hidde
 .dm-app .dm-shoplist-room { display: block; margin: -4px 0 8px 64px; }
 .dm-app .dm-shoplist-total { font-size: 16px; }
 .dm-app .dm-btn.icon .dm-icon { width: 16px; height: 16px; }
+
+/* Farbvarianten */
+.dm-app .dm-dots { display: flex; gap: 3px; margin-top: 3px; }
+.dm-app .dm-dots i { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+.dm-app .dm-variants { display: flex; flex-wrap: wrap; gap: 6px; }
+.dm-app .dm-variant { display: inline-flex; align-items: center; gap: 6px; }
+.dm-app .dm-variant i { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.18); flex: none; }
+.dm-app .dm-variant.active { border-color: var(--dm-accent); box-shadow: 0 0 0 1px var(--dm-accent) inset; }

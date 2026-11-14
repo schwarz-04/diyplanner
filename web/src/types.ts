@@ -44,7 +44,13 @@ export interface Product {
   price?: number | null;
   /** Eintrag aus der Produktliste der Webseite */
   catalog_id?: string;
+  /** Farbvarianten aus der Produktliste */
+  variants?: ProductVariant[];
+  /** Gewählte Variante (Name) */
+  variant?: string;
 }
+
+export interface ProductVariant { name: string; color: string }
 
 export interface SceneObject {
   id: string;
@@ -124,6 +130,7 @@ export interface ShopProduct {
   category: Category;
   size: [number, number, number];
   color: string;
+  variants?: ProductVariant[];
 }
 
 export type Selection =
