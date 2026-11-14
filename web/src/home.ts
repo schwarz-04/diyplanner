@@ -183,3 +183,66 @@ export function walkStart(r: PlacedRoom): { x: number; y: number; look: Pt } {
   const [x, y] = toWorld(r, start);
   return { x, y, look: toWorld(r, center) };
 }
+
+// ------------------------------------------------------------------ Räume verschieben und drehen
+
+function bounds(r: Pick<PlacedRoom, 'position' | 'rotation' | 'scene'>) {
+  const pts = r.scene.room.polygon.map((p) => toWorld(r, p));
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+/**
+ * Neue Lage eines Raums, eingerastet an den Nachbarräumen:
+ * Wand an Wand (Abstand = Wandstärke) oder bündig an einer Flucht, sonst auf 5 cm gerundet.
+ */
+export function snapRoom(home: Home, index: number, position: Pt, tolerance = 0.25): Pt {
+  const room = home.rooms[index];
+  const me = bounds({ ...room, position });
+  const t = room.scene.walls[0]?.thickness ?? 0.12;
+  let bestX: number | null = null, bestY: number | null = null;
+  const tryX = (d: number) => { if (Math.abs(d) <= tolerance && (bestX === null || Math.abs(d) < Math.abs(bestX))) bestX = d; };
+  const tryY = (d: number) => { if (Math.abs(d) <= tolerance && (bestY === null || Math.abs(d) < Math.abs(bestY))) bestY = d; };
+  home.rooms.forEach((o, i) => {
+    if (i === index) return;
+    const b = bounds(o);
+    const nearY = me.y0 < b.y1 + 1 && me.y1 > b.y0 - 1;
+    const nearX = me.x0 < b.x1 + 1 && me.x1 > b.x0 - 1;
+    if (nearY) {
+      tryX(b.x1 + t - me.x0); // rechts anliegend
+      tryX(b.x0 - t - me.x1); // links anliegend
+    }
+    if (nearX) {
+      tryY(b.y1 + t - me.y0);
+      tryY(b.y0 - t - me.y1);
+      tryX(b.x0 - me.x0); // Fluchten
+      tryX(b.x1 - me.x1);
+    }
+    if (nearY) {
+      tryY(b.y0 - me.y0);
+      tryY(b.y1 - me.y1);
+    }
+  });
+  const round = (v: number) => Math.round(v * 20) / 20;
+  return [
+    bestX !== null ? Math.round((position[0] + bestX) * 1000) / 1000 : round(position[0]),
+    bestY !== null ? Math.round((position[1] + bestY) * 1000) / 1000 : round(position[1]),
+  ];
+}
+
+export function moveRoom(home: Home, index: number, position: Pt): Home {
+  return { ...home, rooms: home.rooms.map((r, i) => (i === index ? { ...r, position } : r)) };
+}
+
+/** Raum um seine Mitte drehen (Grad, gegen den Uhrzeigersinn). */
+export function rotateRoom(home: Home, index: number, deg: number): Home {
+  const r = home.rooms[index];
+  const b0 = bounds(r);
+  const turned = { ...r, rotation: (((r.rotation + deg) % 360) + 360) % 360 };
+  const b1 = bounds(turned);
+  const position: Pt = [
+    Math.round((r.position[0] + (b0.x0 + b0.x1 - b1.x0 - b1.x1) / 2) * 1000) / 1000,
+    Math.round((r.position[1] + (b0.y0 + b0.y1 - b1.y0 - b1.y1) / 2) * 1000) / 1000,
+  ];
+  return { ...home, rooms: home.rooms.map((x, i) => (i === index ? { ...turned, position } : x)) };
+}

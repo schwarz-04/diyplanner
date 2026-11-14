@@ -18,6 +18,8 @@ export type Tool = 'select' | 'measure';
 export interface ViewerEvents {
   onSelect: (sel: Selection) => void;
   onObjectMoved: (id: string, position: [number, number, number], rotation: number) => void;
+  /** Während des Ziehens (noch nicht gespeichert), z. B. für den Grundriss. */
+  onObjectMoving?: (id: string, position: [number, number, number], rotation: number) => void;
   onMeasured?: (meters: number) => void;
   /** Ein anderer Raum der Wohnung wurde angetippt. */
   onRoomPick?: (index: number) => void;
@@ -31,9 +33,14 @@ export class Viewer {
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
   readonly gizmo: TransformControls;
-  /** Zweiter Griff zum Drehen, nur beim Platzieren neuer Möbel (zusätzlich zu den Pfeilen). */
-  private rotGizmo: TransformControls;
-  private placing: { id: string; foot: THREE.Group; mats: Map<THREE.Mesh, THREE.Material | THREE.Material[]> } | null = null;
+  /** Neues Möbel, noch nicht bestätigt: halbtransparent, Raum bleibt fest. */
+  private placing: { id: string; mats: Map<THREE.Mesh, THREE.Material | THREE.Material[]> } | null = null;
+  /** Bodenrahmen und Drehgriff des ausgewählten Möbels. */
+  private handles: { id: string; group: THREE.Group; hit: THREE.Mesh } | null = null;
+  private drag: {
+    kind: 'move' | 'rotate'; id: string; plane: THREE.Plane; start: THREE.Vector3; startWorld: THREE.Vector3;
+    startRot: number; startAngle: number; pointerId: number; moved: boolean;
+  } | null = null;
   private root: THREE.Group | null = null;
   private homeRoot = new THREE.Group();
   private rooms: RoomView[] = [];
@@ -92,33 +99,18 @@ export class Viewer {
     this.gizmo.setSize(0.8);
     this.gizmo.showY = false;
     this.gizmo.addEventListener('dragging-changed', (e) => {
-      this.controls.enabled = !(e as unknown as { value: boolean }).value;
-      if (!(e as unknown as { value: boolean }).value) this.commitTransform();
-    });
-    this.gizmo.addEventListener('objectChange', () => {
-      this.selectionBox?.update();
-      this.measure.updateSelection();
-      this.updateFootprint();
-    });
-    this.scene.add(this.gizmo.getHelper());
-
-    this.rotGizmo = new TransformControls(this.camera, this.renderer.domElement);
-    this.rotGizmo.setMode('rotate');
-    this.rotGizmo.setSize(0.9);
-    this.rotGizmo.showX = false;
-    this.rotGizmo.showZ = false;
-    this.rotGizmo.setRotationSnap(THREE.MathUtils.degToRad(15));
-    this.rotGizmo.addEventListener('dragging-changed', (e) => {
       const v = (e as unknown as { value: boolean }).value;
-      this.controls.enabled = !v;
+      this.controls.enabled = !v && !this.placing;
       if (!v) this.commitTransform();
     });
-    this.rotGizmo.addEventListener('objectChange', () => {
-      this.selectionBox?.update();
-      this.measure.updateSelection();
-      this.updateFootprint();
-    });
-    this.scene.add(this.rotGizmo.getHelper());
+    this.gizmo.addEventListener('objectChange', () => this.objectChanged());
+    // Nur die drei Pfeile zeigen: die Flächen- und Mittelgriffe verwirren und verdecken das Möbel.
+    const giz = (this.gizmo as unknown as { _gizmo?: Record<string, Record<string, THREE.Object3D> | undefined> })._gizmo;
+    for (const set of [giz?.gizmo?.translate, giz?.picker?.translate]) {
+      for (const c of [...(set?.children ?? [])]) if (['XY', 'YZ', 'XZ', 'XYZ'].includes(c.name)) set!.remove(c);
+    }
+    this.scene.add(this.gizmo.getHelper());
+    this.setGizmoMode('translate');
 
     this.measure = new Measure(container, this.scene);
     this.walk = new WalkControls(this.camera, this.renderer.domElement, container);
@@ -129,7 +121,7 @@ export class Viewer {
       if (!this.pointerDown) return;
       const moved = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y);
       this.pointerDown = null;
-      if (moved >= 5 || this.gizmo.dragging || this.rotGizmo.dragging) return;
+      if (moved >= 5 || this.gizmo.dragging) return;
       if (this.tool === 'measure') {
         const p = this.surfacePoint(e);
         if (p) {
@@ -141,6 +133,13 @@ export class Viewer {
     el.addEventListener('pointermove', (e) => {
       if (this.tool === 'measure' && this.measure.measuring && e.pointerType !== 'touch') this.measure.preview(this.surfacePoint(e));
     });
+
+    // Möbel direkt ziehen und am Bogen drehen. Fängt den Zeiger vor Kamera und Pfeilen ab.
+    container.addEventListener('pointerdown', (e) => this.dragStart(e), { capture: true });
+    window.addEventListener('pointermove', (e) => this.dragMove(e));
+    const end = (e: PointerEvent) => this.dragEnd(e);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -210,7 +209,7 @@ export class Viewer {
     return this.placing?.id ?? null;
   }
 
-  /** Möbel halbtransparent mit Pfeilen, Drehring und Bodenrahmen zeigen, bis es bestätigt wird. */
+  /** Möbel halbtransparent zeigen, bis es bestätigt wird. Solange bleibt die Kamera fest. */
   startPlacing(id: string): void {
     this.stopPlacing();
     const node = this.nodes.get(id);
@@ -230,11 +229,9 @@ export class Viewer {
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(ghost) : ghost(mesh.material);
       mesh.castShadow = false;
     });
-    const foot = footprint(node);
-    this.scene.add(foot);
-    this.placing = { id, foot, mats };
-    this.updateFootprint();
-    this.rotGizmo.attach(node);
+    this.placing = { id, mats };
+    this.controls.enabled = false;
+    this.renderer.domElement.style.cursor = 'move';
   }
 
   /** Platzieren beenden: wieder voll sichtbar. */
@@ -242,9 +239,8 @@ export class Viewer {
     const p = this.placing;
     if (!p) return;
     this.placing = null;
-    this.rotGizmo.detach();
-    this.scene.remove(p.foot);
-    disposeTree(p.foot);
+    this.controls.enabled = this.mode !== 'walk';
+    this.renderer.domElement.style.cursor = this.tool === 'measure' ? 'crosshair' : '';
     for (const [mesh, orig] of p.mats) {
       const ghosts = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const origs = Array.isArray(orig) ? orig : [orig];
@@ -259,18 +255,147 @@ export class Viewer {
     }
   }
 
-  private updateFootprint(): void {
-    const p = this.placing;
-    if (!p) return;
-    const node = this.nodes.get(p.id);
+  // ------------------------------------------------------------------ Bodenrahmen, Drehgriff, Ziehen
+
+  private setHandles(id: string | null): void {
+    if (this.handles) {
+      this.scene.remove(this.handles.group);
+      disposeTree(this.handles.group);
+      this.handles = null;
+    }
+    const node = id ? this.nodes.get(id) : null;
+    if (!id || !node || this.mode === 'walk') return;
+    const { group, hit } = footprint(node);
+    this.scene.add(group);
+    this.handles = { id, group, hit };
+    this.updateHandles();
+  }
+
+  private updateHandles(): void {
+    const hd = this.handles;
+    if (!hd) return;
+    const node = this.nodes.get(hd.id);
     if (!node) return;
     node.updateWorldMatrix(true, false);
     const pos = new THREE.Vector3();
     const q = new THREE.Quaternion();
     node.getWorldPosition(pos);
     node.getWorldQuaternion(q);
-    p.foot.position.set(pos.x, 0.025, pos.z);
-    p.foot.quaternion.copy(q);
+    hd.group.position.set(pos.x, 0.025, pos.z);
+    hd.group.quaternion.copy(q);
+    hd.group.updateMatrixWorld(true);
+  }
+
+  /** Nach jeder Bewegung (Pfeile, Ziehen, Drehen): Hilfslinien nachführen. */
+  private objectChanged(): void {
+    const sel = this.selection;
+    if (sel?.kind === 'object') {
+      const node = this.nodes.get(sel.id);
+      if (node) {
+        // Nur um die Hochachse drehen, nie unter den Boden oder durch die Decke
+        node.rotation.x = 0;
+        node.rotation.z = 0;
+        const size = this.sceneData?.objects.find((o) => o.id === sel.id)?.size;
+        const top = Math.max(0, (this.sceneData?.room.height ?? 2.5) - (size?.[2] ?? 0));
+        node.position.y = THREE.MathUtils.clamp(node.position.y, 0, top);
+        const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
+        this.events.onObjectMoving?.(sel.id, threeToPlan(node.position), rot);
+      }
+    }
+    this.selectionBox?.update();
+    this.measure.updateSelection();
+    this.updateHandles();
+  }
+
+  private rayFor(e: PointerEvent): THREE.Raycaster {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    return ray;
+  }
+
+  private dragStart(e: PointerEvent): void {
+    if (e.target !== this.renderer.domElement || e.button !== 0 || this.mode === 'walk' || this.tool !== 'select' || this.drag) return;
+    const sel = this.selection;
+    if (sel?.kind !== 'object') return;
+    const node = this.nodes.get(sel.id);
+    if (!node) return;
+    const ray = this.rayFor(e);
+    const begin = (kind: 'move' | 'rotate', plane: THREE.Plane): void => {
+      const start = ray.ray.intersectPlane(plane, new THREE.Vector3());
+      if (!start) return;
+      const world = node.getWorldPosition(new THREE.Vector3());
+      this.drag = {
+        kind, id: sel.id, plane, start, startWorld: world, startRot: node.rotation.y,
+        startAngle: Math.atan2(-(start.z - world.z), start.x - world.x), pointerId: e.pointerId, moved: false,
+      };
+      this.controls.enabled = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    // Drehgriff hat Vorrang
+    if (this.handles && ray.intersectObject(this.handles.hit, false).length) {
+      begin('rotate', new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.025));
+      return;
+    }
+    // Pfeile des Griffs (auf Touch-Geräten gibt es vorher kein Hover)
+    const g = this.gizmo as unknown as { axis: string | null; pointerHover?: (p: unknown) => void; _getPointer?: (e: PointerEvent) => unknown };
+    if (e.pointerType !== 'mouse') g.pointerHover?.(g._getPointer?.(e));
+    if (g.axis && g.axis !== 'XYZ') return;
+    const hit = ray.intersectObject(node, true)[0];
+    if (!hit && !this.placing) return;
+    const at = hit?.point ?? node.getWorldPosition(new THREE.Vector3());
+    const cat = this.sceneData?.objects.find((o) => o.id === sel.id)?.category ?? '';
+    let plane: THREE.Plane;
+    if (WALL_ITEMS.has(cat)) {
+      // An der Wand: seitlich und in der Höhe verschieben
+      const normal = new THREE.Vector3(0, 0, 1).transformDirection(node.matrixWorld);
+      normal.y = 0;
+      if (normal.lengthSq() < 1e-6) normal.set(0, 0, 1);
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.normalize(), at);
+    } else {
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), at);
+    }
+    begin('move', plane);
+  }
+
+  private dragMove(e: PointerEvent): void {
+    const d = this.drag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const node = this.nodes.get(d.id);
+    if (!node) return;
+    const p = this.rayFor(e).ray.intersectPlane(d.plane, new THREE.Vector3());
+    if (!p) return;
+    d.moved = true;
+    if (d.kind === 'rotate') {
+      const angle = Math.atan2(-(p.z - d.startWorld.z), p.x - d.startWorld.x);
+      const step = THREE.MathUtils.degToRad(e.shiftKey ? 1 : 5);
+      node.rotation.y = Math.round((d.startRot + angle - d.startAngle) / step) * step;
+    } else {
+      const target = d.startWorld.clone().add(p.sub(d.start));
+      node.position.copy(node.parent ? node.parent.worldToLocal(target) : target);
+    }
+    this.objectChanged();
+  }
+
+  private dragEnd(e: PointerEvent): void {
+    const d = this.drag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    this.drag = null;
+    this.controls.enabled = !this.placing && this.mode !== 'walk';
+    if (d.moved) this.commitTransform();
+  }
+
+  /** Möbel von außen bewegen (Grundriss), ohne Neubau. */
+  moveNode(id: string, position: [number, number, number], rotation?: number): void {
+    const node = this.nodes.get(id);
+    if (!node) return;
+    node.position.copy(planToThree(position[0], position[1], position[2]));
+    if (rotation !== undefined) node.rotation.y = THREE.MathUtils.degToRad(rotation);
+    this.selectionBox?.update();
+    this.measure.updateSelection();
+    this.updateHandles();
   }
 
   /** Wand des bearbeiteten Raums, auf die die Kamera am direktesten schaut (für Bilder, Spiegel …). */
@@ -326,6 +451,7 @@ export class Viewer {
       if (!this.home) return;
       this.gizmo.detach();
       this.stopPlacing();
+      this.setHandles(null);
       this.controls.enabled = false;
       this.controls.autoRotate = false;
       this.walk.enable(walkWorld(this.home), this.blockers(), walkStart(this.home.rooms[this.active]));
@@ -478,6 +604,7 @@ export class Viewer {
       this.scene.add(this.selectionBox);
     }
     if (node && sel?.kind === 'object' && this.mode !== 'walk') this.gizmo.attach(node);
+    this.setHandles(node && sel?.kind === 'object' ? sel.id : null);
     const obj = sel?.kind === 'object' ? this.sceneData?.objects.find((o) => o.id === sel.id) : undefined;
     this.measure.setSelection(obj && node ? node : null, obj?.size);
     if (notify) this.events.onSelect(sel);
@@ -485,9 +612,10 @@ export class Viewer {
 
   setGizmoMode(mode: 'translate' | 'rotate'): void {
     this.gizmo.setMode(mode);
+    // Verschieben: alle drei Richtungen (auch in der Höhe). Drehen: nur um die Hochachse.
     this.gizmo.showX = mode === 'translate';
     this.gizmo.showZ = mode === 'translate';
-    this.gizmo.showY = mode === 'rotate';
+    this.gizmo.showY = true;
     if (mode === 'rotate') this.gizmo.setRotationSnap(THREE.MathUtils.degToRad(15));
     else this.gizmo.setTranslationSnap(null);
   }
@@ -507,6 +635,7 @@ export class Viewer {
     this.events.onObjectMoved(sel.id, threeToPlan(node.position), Math.round(rot * 10) / 10);
     this.selectionBox?.update();
     this.measure.updateSelection();
+    this.updateHandles();
     this.updateWalkWorld();
   }
 
@@ -655,8 +784,11 @@ function disposeTree(root: THREE.Object3D): void {
   });
 }
 
-/** Rahmen mit Schatten unter dem Möbel (in dessen Drehung), am Boden. */
-function footprint(node: THREE.Object3D): THREE.Group {
+/** Wandobjekte: beim Ziehen an der Wand entlang und in der Höhe verschieben. */
+const WALL_ITEMS = new Set(['wall_shelf', 'picture', 'mirror', 'curtain']);
+
+/** Rahmen am Boden unter dem Möbel (in dessen Drehung) mit Bogen-Griff zum Drehen. */
+function footprint(node: THREE.Object3D): { group: THREE.Group; hit: THREE.Mesh } {
   node.updateWorldMatrix(true, true);
   const inv = node.matrixWorld.clone().invert();
   const box = new THREE.Box3();
@@ -667,14 +799,15 @@ function footprint(node: THREE.Object3D): THREE.Group {
     box.union(m.geometry.boundingBox!.clone().applyMatrix4(m.matrixWorld).applyMatrix4(inv));
   });
   const g = new THREE.Group();
-  if (box.isEmpty()) return g;
+  if (box.isEmpty()) box.set(new THREE.Vector3(-0.2, 0, -0.2), new THREE.Vector3(0.2, 0.2, 0.2));
   const pad = 0.03;
   const w = box.max.x - box.min.x + pad * 2;
   const d = box.max.z - box.min.z + pad * 2;
   const cx = (box.min.x + box.max.x) / 2;
   const cz = (box.min.z + box.max.z) / 2;
+  const accent = '#c2537a';
   const fill = new THREE.Mesh(new THREE.PlaneGeometry(w, d),
-    new THREE.MeshBasicMaterial({ color: '#c2537a', transparent: true, opacity: 0.3, depthWrite: false, depthTest: false }));
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.22, depthWrite: false, depthTest: false }));
   fill.rotation.x = -Math.PI / 2;
   fill.position.set(cx, 0, cz);
   fill.renderOrder = 8;
@@ -682,8 +815,30 @@ function footprint(node: THREE.Object3D): THREE.Group {
   const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(cx - hw, 0.002, cz - hd), new THREE.Vector3(cx + hw, 0.002, cz - hd),
     new THREE.Vector3(cx + hw, 0.002, cz + hd), new THREE.Vector3(cx - hw, 0.002, cz + hd),
-  ]), new THREE.LineBasicMaterial({ color: '#c2537a', transparent: true, depthTest: false }));
+  ]), new THREE.LineBasicMaterial({ color: accent, transparent: true, depthTest: false }));
   outline.renderOrder = 9;
-  g.add(fill, outline);
-  return g;
+
+  // Drehgriff: Viertelbogen mit Pfeilspitzen vor der vorderen rechten Ecke
+  const r = Math.hypot(hw, hd) + 0.16;
+  const mat = new THREE.MeshBasicMaterial({ color: accent, transparent: true, depthTest: false });
+  const arcStart = -Math.PI / 4 - 0.5, arcLen = 1.0;
+  const arc = new THREE.Mesh(new THREE.TorusGeometry(r, 0.02, 6, 24, arcLen), mat);
+  const handle = new THREE.Group();
+  handle.add(arc);
+  for (const [a, dir] of [[0, -1], [arcLen, 1]] as const) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.13, 10), mat);
+    cone.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+    cone.rotation.z = a + (dir > 0 ? 0 : Math.PI);
+    handle.add(cone);
+  }
+  const hit = new THREE.Mesh(new THREE.TorusGeometry(r, 0.11, 6, 16, arcLen + 0.3),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, depthTest: false }));
+  hit.rotation.z = -0.15;
+  handle.add(hit);
+  // Torus liegt in der XY-Ebene: flach auf den Boden legen und nach vorne rechts drehen
+  handle.rotation.set(-Math.PI / 2, 0, arcStart);
+  handle.position.set(cx, 0.004, cz);
+  handle.traverse((o) => (o.renderOrder = 10));
+  g.add(fill, outline, handle);
+  return { group: g, hit };
 }

@@ -71,6 +71,10 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    Steht in der Kategorie ein Sammelbegriff (Regal, Möbel, Deko), wählt der Import das 3D-Modell aus dem
    Produktnamen; im Möbel-Menü erscheinen die Produkte unter Regale / Möbel / Deko, filterbar nach Shop.
 
+   Bedienung: Am Desktop steht das Menü als Seitenleiste links, rechts der Grundriss (Möbel ziehen,
+   Maße anklicken, Räume verschieben) und die Merkliste. Neue Möbel erscheinen halbtransparent und
+   werden gezogen, am Bogen gedreht und mit Enter bestätigt. Unten rechts steht die Plugin-Version.
+
 5. Projekte: Änderungen werden laufend gesichert. Über „Speichern“ bekommt ein Projekt Namen und
    Vorschaubild, unter „Projekte“ lassen sich alle wieder öffnen, umbenennen, kopieren oder löschen.
    Angemeldete Nutzer sehen ihre Projekte auf jedem Gerät, ohne Anmeldung merkt sie sich der Browser.

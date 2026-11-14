@@ -1,6 +1,7 @@
 import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
-import { attachRoom, emptyRoom, replaceRoom, toHome } from './home';
+import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
+import { PlanView } from './plan';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
@@ -82,7 +83,13 @@ export class App {
   private furnTab: FurnTab | null = null;
   private shopFilter: 'all' | Product['source'] = 'all';
   /** Bei ausgewähltem Möbel: Katalog statt Eigenschaften zeigen */
-  private furnAdd = false;
+  private furnAdd = true;
+  private favs = loadFavs();
+  private plan!: PlanView;
+  /** Breites Fenster: Seitenleiste links, Grundriss rechts. Schmal: Leiste unten, Grundriss als Karte. */
+  private wide = false;
+  private planOpen: boolean | null = null;
+  private version = '';
 
   // DOM
   private elStatus = h('span', { class: 'dm-status' });
@@ -93,6 +100,11 @@ export class App {
   private elCanvas = h('div', { class: 'dm-canvas' });
   private elOverlay = h('div', { class: 'dm-overlay', hidden: true });
   private elToolbar = h('div', { class: 'dm-floating', hidden: true });
+  private elPlan = h('div', { class: 'dm-plan' });
+  private elFavs = h('div', { class: 'dm-favs', hidden: true });
+  private elPlanHead = h('div', { class: 'dm-plan-head' });
+  private elPlanBody = h('div', { class: 'dm-plan-body' });
+  private elVersion = h('div', { class: 'dm-version' });
   private btnUndo = h('button', { class: 'dm-btn ghost', title: 'Rückgängig (Strg+Z)', onclick: () => this.undo() }, '↶');
   private btnRedo = h('button', { class: 'dm-btn ghost', title: 'Wiederholen (Strg+Y)', onclick: () => this.redo() }, '↷');
 
@@ -106,29 +118,65 @@ export class App {
       h('header', { class: 'dm-top' },
         h('div', { class: 'dm-brand' },
           this.opts.backUrl ? h('a', { class: 'dm-backlink', href: this.opts.backUrl, title: 'Zurück zur Webseite' }, '← ' + (this.opts.backLabel || 'Webseite')) : null,
-          h('span', { class: 'dm-logo' }, '◆'), this.elTitle),
+          h('button', { class: 'dm-btn ghost dm-home', title: 'Übersicht: alle Projekte, neues Projekt', onclick: () => this.showProjects() }, icon(ICON_HOME), h('span', {}, 'Home')),
+          h('button', { class: 'dm-title-btn needs-project', title: 'Projekt umbenennen', onclick: () => this.showSave() }, this.elTitle)),
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
-          h('span', { class: 'dm-sep' }),
-          h('button', { class: 'dm-btn ghost', onclick: () => this.showSave() }, 'Speichern'),
-          h('button', { class: 'dm-btn ghost', onclick: () => this.showProjects() }, 'Projekte'),
-          h('button', { class: 'dm-btn ghost', onclick: () => this.showShoppingList() }, 'Einkaufsliste'),
-          h('button', { class: 'dm-btn ghost', onclick: () => this.renderImage() }, 'Foto-Rendering'),
+          h('span', { class: 'dm-sep needs-project' }),
+          h('button', { class: 'dm-btn ghost needs-project', title: 'Projekt mit Namen speichern', onclick: () => this.showSave() }, icon(ICON_SAVE), h('span', {}, 'Speichern')),
+          h('button', { class: 'dm-btn ghost needs-project', title: 'Gemerkte Produkte', onclick: () => this.showFavorites() }, icon(ICON_HEART), h('span', {}, 'Merkliste')),
+          h('button', { class: 'dm-btn ghost needs-project', onclick: () => this.showShoppingList() }, icon(ICON_CART), h('span', {}, 'Einkaufsliste')),
+          h('button', { class: 'dm-btn ghost needs-project', onclick: () => this.renderImage() }, icon(ICON_CAMERA), h('span', {}, 'Foto-Rendering')),
           this.elStatus,
         ),
       ),
-      h('div', { class: 'dm-main' }, h('div', { class: 'dm-stage' }, this.elCanvas, this.elToolbar, this.elPop, this.elDock)),
+      h('div', { class: 'dm-main' },
+        h('aside', { class: 'dm-side' }, this.elDock, this.elPop),
+        h('div', { class: 'dm-stage' }, this.elCanvas, this.elToolbar, this.elVersion),
+        h('aside', { class: 'dm-right' }, this.elPlan, this.elFavs)),
       this.elOverlay,
       this.elCaption,
     );
+    this.btnUndo.classList.add('needs-project');
+    this.btnRedo.classList.add('needs-project');
+    this.elPlan.append(this.elPlanHead, this.elPlanBody,
+      h('p', { class: 'dm-plan-hint' }, 'Möbel ziehen = verschieben · Maß anklicken = ändern'));
+    this.plan = new PlanView(this.elPlanBody, {
+      onSelectObject: (id) => this.viewer.setSelection(id ? { kind: 'object', id } : null, true),
+      onObjectMoving: (id, x, y) => {
+        const o = this.scene?.objects.find((v) => v.id === id);
+        if (o) this.viewer.moveNode(id, [x, y, o.position[2]]);
+      },
+      onObjectMoved: (id, x, y) => {
+        const o = this.scene?.objects.find((v) => v.id === id);
+        if (o) this.objectMoved(id, [x, y, o.position[2]], o.rotation);
+      },
+      onRoomPick: (i) => this.switchRoom(i),
+      onRoomMoved: (i, pos) => { if (this.home) this.applyHome(moveRoom(this.home, i, pos), true); },
+      onEditWall: (i, meters) => this.editWall(i, meters),
+    });
     this.viewer = new Viewer(this.elCanvas, {
       onSelect: (sel) => this.select(sel),
+      onObjectMoving: (id, pos, rot) => this.plan.updateObject(id, pos[0], pos[1], rot),
       onObjectMoved: (id, pos, rot) => this.objectMoved(id, pos, rot),
       onMeasured: () => this.renderMenu(),
       onRoomPick: (i) => this.switchRoom(i),
     });
+    this.viewer.measure.onEditWall = (i, meters) => this.editWall(i, meters);
+    this.viewer.measure.onEditHeight = (meters) => { this.rebuildWith((n) => (n.room.height = meters)); };
     this.renderDock();
-    new ResizeObserver(() => this.updateShift()).observe(this.root);
+    const layout = () => {
+      const wide = this.root.clientWidth >= 1000;
+      if (wide !== this.wide || this.planOpen === null) {
+        this.wide = wide;
+        this.root.classList.toggle('dm-wide', wide);
+        if (this.planOpen === null) this.planOpen = wide;
+        this.renderMenu();
+      }
+      this.updateShift();
+    };
+    new ResizeObserver(layout).observe(this.root);
+    layout();
     window.addEventListener('keydown', (e) => this.onKey(e));
 
     if (this.opts.demo) {
@@ -142,6 +190,8 @@ export class App {
       this.analysisAvailable = health.analysis_available;
       this.canCreate = health.can_create ?? true;
       this.loginUrl = health.login_url ?? '';
+      this.version = health.version ?? '';
+      this.elVersion.textContent = this.version ? `Raumplaner v${this.version}` : '';
       // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
       this.api.products().then((r) => {
         this.products = r.products ?? [];
@@ -351,6 +401,7 @@ export class App {
       rememberLocal(id);
       this.viewer.setHome(this.home, 0, false);
       this.hideOverlay();
+      if (this.wide && !this.menu) this.menu = 'furniture';
       this.select(null);
       this.setStatus('Gespeichert');
     } catch (err) {
@@ -530,6 +581,7 @@ export class App {
       this.renderPanel();
     } else {
       this.viewer.updateData(next.rooms[this.active].scene);
+      this.renderPlan();
     }
     this.updateButtons();
     this.scheduleSave();
@@ -637,13 +689,21 @@ export class App {
 
   /** Neues Teil: Menü schließen, halbtransparent einsetzen, Nutzer verschiebt/dreht und bestätigt. */
   private async placeNew(category: Category, opt: NewObjectOptions = {}): Promise<void> {
-    this.menu = null;
-    this.furnAdd = false;
+    // Schmal: Menü schließen, damit der Raum frei ist. Breit bleibt die Seitenleiste stehen (kein Springen des Bildes).
+    if (!this.wide) this.menu = null;
+    this.furnAdd = true;
     this.renderMenu();
     const id = await this.addObject(category, opt);
     this.setGizmo('translate');
     this.viewer.startPlacing(id);
     this.renderFloating();
+  }
+
+  /** Eigenschaften des ausgewählten Möbels im Möbel-Menü zeigen (statt des Katalogs). */
+  private editObject(): void {
+    this.menu = 'furniture';
+    this.furnAdd = false;
+    this.renderMenu();
   }
 
   private confirmPlacing(): void {
@@ -681,6 +741,8 @@ export class App {
   // ================================================================== Menü unten (Drop-up)
 
   private select(sel: Selection): void {
+    const same = sel?.kind === 'object' && this.selection?.kind === 'object' && sel.id === this.selection.id;
+    if (!same) this.furnAdd = true; // Möbel-Menü zeigt wieder den Katalog
     this.selection = sel;
     this.renderMenu();
     this.renderFloating();
@@ -694,6 +756,7 @@ export class App {
 
   private toggleMenu(id: MenuId): void {
     this.menu = this.menu === id ? null : id;
+    if (id === 'furniture') this.furnAdd = true;
     this.renderMenu();
   }
 
@@ -713,7 +776,10 @@ export class App {
 
   private renderMenu(): void {
     const s = this.scene;
-    if (s) this.elTitle.textContent = this.project?.name || s.room.name || 'Raumplaner';
+    this.elTitle.textContent = s ? this.project?.name || s.room.name || 'Raumplaner' : 'Raumplaner';
+    this.root.classList.toggle('dm-empty', !s);
+    this.root.classList.toggle('dm-panel-open', !!this.menu && !!s);
+    this.renderPlan();
     this.renderDock();
     this.elPop.replaceChildren();
     this.elPop.hidden = !this.menu || !s;
@@ -738,6 +804,84 @@ export class App {
         h('button', { class: 'dm-btn ghost small', title: 'Schließen', onclick: () => this.toggleMenu(this.menu!) }, '✕')),
       h('div', { class: 'dm-pop-body' }, body),
     );
+  }
+
+  // ------------------------------------------------------------------ Grundriss
+
+  private editWall(index: number, meters: number): void {
+    const s = this.scene;
+    if (!s) return;
+    this.apply(setWallLength(s, index, meters, this.proportional), true);
+    this.toast(`Wand ${index + 1}: ${Math.round(meters * 100)} cm`);
+  }
+
+  private toggleMoveRooms(): void {
+    this.plan.moveRooms = !this.plan.moveRooms;
+    if (this.plan.moveRooms) {
+      this.planOpen = true;
+      this.toast('Im Grundriss einen Raum ziehen. Er rastet an den Nachbarräumen ein.');
+    }
+    this.renderMenu();
+  }
+
+  private renderPlan(): void {
+    const home = this.home;
+    const open = !!this.planOpen;
+    this.elPlan.classList.toggle('collapsed', !open);
+    if (home && home.rooms.length < 2) this.plan.moveRooms = false;
+    const many = !!home && home.rooms.length > 1;
+    this.elPlanHead.replaceChildren(
+      h('button', { class: 'dm-plan-toggle', title: open ? 'Grundriss einklappen' : 'Grundriss zeigen', onclick: () => { this.planOpen = !open; this.renderPlan(); } },
+        icon(ICON_PLAN), h('strong', {}, 'Grundriss')),
+      ...(open && many ? [
+        h('button', { class: `dm-btn small${this.plan.moveRooms ? ' primary' : ''}`, title: 'Ganze Räume im Grundriss verschieben', onclick: () => this.toggleMoveRooms() }, 'Räume verschieben'),
+        h('button', { class: 'dm-btn small', title: 'Bearbeiteten Raum um 90° drehen', onclick: () => this.applyHome(rotateRoom(this.home!, this.active, 90), true) }, '90°'),
+      ] : []));
+    const sel = this.selection;
+    this.plan.setData(open ? home : null, this.active, sel?.kind === 'object' ? sel.id : null);
+    this.renderFavs();
+  }
+
+  // ------------------------------------------------------------------ Favoriten
+
+  private toggleFav(item: FavItem): void {
+    if (this.favs.has(item.key)) this.favs.delete(item.key);
+    else this.favs.set(item.key, item);
+    saveFavs(this.favs);
+    this.renderFavs();
+  }
+
+  private favRow(f: FavItem): HTMLElement {
+    return h('div', { class: 'dm-favrow' },
+      h('a', { class: 'dm-favlink', href: this.shopLink(f.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' },
+        productImage(f),
+        h('span', { class: 'dm-product-text' },
+          h('strong', {}, f.name),
+          h('span', { class: 'dm-muted small' }, [SHOP_LABEL[f.source], f.price != null ? euro(f.price) : ''].filter(Boolean).join(' · ')))),
+      h('button', { class: 'dm-btn small ghost', title: 'Von der Merkliste nehmen', onclick: () => { this.toggleFav(f); this.renderMenu(); if (!this.elOverlay.hidden) this.showFavorites(); } }, '✕'));
+  }
+
+  /** Merkliste rechts unter dem Grundriss (breites Fenster). */
+  private renderFavs(): void {
+    const list = [...this.favs.values()];
+    this.elFavs.hidden = !list.length || !this.scene;
+    this.elFavs.replaceChildren(
+      h('div', { class: 'dm-favs-head' }, icon(ICON_HEART), h('strong', {}, 'Gemerkte Produkte'), h('span', { class: 'dm-count' }, String(list.length))),
+      h('div', { class: 'dm-favs-list' }, list.map((f) => this.favRow(f))));
+  }
+
+  private showFavorites(): void {
+    const list = [...this.favs.values()];
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'Gemerkte Produkte'),
+      list.length
+        ? h('div', { class: 'dm-favs-list' }, list.map((f) => this.favRow(f)))
+        : h('p', { class: 'dm-muted' }, 'Noch nichts gemerkt. Tippe im Möbel-Menü auf das Herz oder bei einem Möbel im Raum auf „Produkt merken“.'),
+      list.length > 0 && h('p', { class: 'dm-muted small' }, 'Ein Klick öffnet das Produkt im Shop in einem neuen Tab. Die Liste merkt sich dieser Browser.'),
+      this.amazonTag && list.some((f) => f.source === 'amazon') && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
+      h('div', { class: 'dm-row end' },
+        list.length > 0 && h('button', { class: 'dm-btn', onclick: () => { this.hideOverlay(); this.furnTab = 'favs'; this.shopFilter = 'all'; this.productQuery = ''; this.openMenu('furniture'); this.furnAdd = true; this.renderMenu(); } }, 'In den Raum einfügen'),
+        h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
   }
 
   // ------------------------------------------------------------------ Ansicht
@@ -803,6 +947,9 @@ export class App {
           onclick: () => this.switchRoom(i),
         }, r.scene.room.name || `Raum ${i + 1}`)),
         h('button', { class: 'dm-chip add', onclick: () => this.showAddRoom() }, '+ Raum anbauen')),
+      rooms.length > 1 && h('div', { class: 'dm-row', style: 'margin-bottom:10px' },
+        h('button', { class: `dm-btn small${this.plan.moveRooms ? ' primary' : ''}`, onclick: () => this.toggleMoveRooms() }, 'Räume verschieben'),
+        h('button', { class: 'dm-btn small', title: 'Diesen Raum um 90° drehen', onclick: () => this.applyHome(rotateRoom(this.home!, this.active, 90), true) }, '90° drehen')),
       field('Name', h('input', {
         class: 'dm-input', value: s.room.name,
         onchange: (e: Event) => this.apply({ ...clone(s), room: { ...clone(s.room), name: (e.target as HTMLInputElement).value } }, false)
@@ -925,15 +1072,13 @@ export class App {
     const s = this.scene!;
     const sel = this.selection;
     const obj = sel?.kind === 'object' ? s.objects.find((o) => o.id === sel.id) : undefined;
-    const mode = (gm: 'translate' | 'rotate', label: string) =>
-      h('button', { class: `dm-tab${this.gizmoMode === gm ? ' active' : ''}`, onclick: () => this.setGizmo(gm) }, label);
     return [
       obj
         ? h('div', {},
           h('p', {}, h('strong', {}, obj.label || this.catalog.categories[obj.category]?.label), ' ist ausgewählt.'),
           this.viewer.viewMode === 'walk'
             ? h('p', { class: 'dm-muted small' }, 'Zum Bewegen und Drehen in die 3D-Ansicht wechseln.')
-            : h('div', { class: 'dm-tabs' }, mode('translate', '✥ Bewegen'), mode('rotate', '⟳ Drehen')),
+            : h('p', { class: 'dm-muted small' }, 'Im Bild oder im Grundriss ziehen zum Verschieben. Der Bogen am Boden dreht, der Pfeil nach oben verstellt die Höhe.'),
           h('div', { class: 'dm-row' },
             h('button', { class: 'dm-btn', onclick: () => this.rotateBy(obj.id, 90) }, '90° drehen'),
             h('button', { class: 'dm-btn', onclick: () => this.duplicateObject(obj.id) }, 'Duplizieren'),
@@ -1077,13 +1222,13 @@ export class App {
     }
   }
 
-  private productCard(p: Product): HTMLElement {
+  private productCard(p: Product, link = true): HTMLElement {
     return h('div', { class: 'dm-product' },
-      p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
+      productImage(p),
       h('div', { class: 'dm-product-text' },
         h('strong', {}, p.name || 'Produkt'),
         h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.variant && (p.variants?.length ?? 0) > 1 ? p.variant : '', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
-      h('a', { class: 'dm-btn small', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener' }, 'Zum Shop'));
+      link && h('a', { class: 'dm-btn small', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener' }, 'Zum Shop'));
   }
 
   /** Farbvarianten eines Produkts als Auswahl (nur wenn es mehrere gibt). */
@@ -1108,18 +1253,27 @@ export class App {
 
   /** Katalog: Reiter Regale / Möbel / Deko (aus der Produkttabelle) und Eigene (einfache Formen, per Link). */
   private catalogView(back: boolean): Child[] {
-    const counts: Record<FurnTab, number> = { regale: 0, moebel: 0, deko: 0, formen: 0 };
-    for (const p of this.products) counts[productGroup(p, this.catalog)]++;
+    const counts: Record<FurnTab, number> = { favs: 0, regale: 0, moebel: 0, deko: 0, formen: 0 };
+    for (const p of this.products) {
+      counts[productGroup(p, this.catalog)]++;
+      if (this.favs.has(p.id)) counts.favs++;
+    }
     if (!this.furnTab) this.furnTab = this.products.length ? (['moebel', 'regale', 'deko'] as FurnTab[]).find((t) => counts[t]) ?? 'formen' : 'formen';
     const tab = this.furnTab;
-    const tabBtn = (t: FurnTab, label: string) => h('button', {
-      class: `dm-tab${tab === t ? ' active' : ''}`,
+    const tabBtn = (t: FurnTab, label: string | Node) => h('button', {
+      class: `dm-tab${tab === t ? ' active' : ''}`, title: t === 'favs' ? 'Gemerkte Produkte' : '',
       onclick: () => { this.furnTab = t; this.shopFilter = 'all'; this.productQuery = ''; this.renderMenu(); },
     }, label, t !== 'formen' && counts[t] ? h('span', { class: 'dm-count' }, String(counts[t])) : '');
     const out: Child[] = [];
-    if (back) out.push(h('button', { class: 'dm-btn small ghost', style: 'margin-bottom:8px', onclick: () => { this.furnAdd = false; this.renderMenu(); } }, '← Zurück zum ausgewählten Möbel'));
-    out.push(h('div', { class: 'dm-tabs', style: 'margin-top:0' },
-      tabBtn('regale', 'Regale'), tabBtn('moebel', 'Möbel'), tabBtn('deko', 'Deko'), tabBtn('formen', 'Eigene')));
+    if (back) {
+      const sel = this.selection;
+      const o = sel?.kind === 'object' ? this.scene?.objects.find((x) => x.id === sel.id) : undefined;
+      out.push(h('div', { class: 'dm-selcard' },
+        h('span', {}, h('strong', {}, o?.label || 'Möbel'), ' ist ausgewählt'),
+        h('button', { class: 'dm-btn small', onclick: () => this.editObject() }, 'Anpassen')));
+    }
+    out.push(h('div', { class: 'dm-tabs dm-tabs-tight', style: 'margin-top:0' },
+      tabBtn('favs', icon(ICON_HEART)), tabBtn('regale', 'Regale'), tabBtn('moebel', 'Möbel'), tabBtn('deko', 'Deko'), tabBtn('formen', 'Eigene')));
 
     if (tab === 'formen') {
       const cats = Object.keys(this.catalog.categories) as Category[];
@@ -1135,7 +1289,11 @@ export class App {
       return out;
     }
 
-    const inTab = this.products.filter((p) => productGroup(p, this.catalog) === tab);
+    const inTab = this.inTab(tab);
+    if (tab === 'favs' && !inTab.length) {
+      out.push(h('p', { class: 'dm-muted small' }, 'Noch nichts gemerkt. Tippe bei einem Produkt auf das Herz, dann findest du es hier wieder.'));
+      return out;
+    }
     const shops = (['ikea', 'amazon', 'other'] as Product['source'][]).filter((src) => inTab.some((p) => p.source === src));
     if (shops.length > 1) {
       const chip = (f: 'all' | Product['source'], label: string) => h('button', {
@@ -1159,7 +1317,11 @@ export class App {
     const tab = this.furnTab;
     const body = this.elPop.querySelector('.dm-product-list');
     if (!tab || tab === 'formen' || !body) return;
-    body.replaceWith(this.productList(this.products.filter((p) => productGroup(p, this.catalog) === tab)));
+    body.replaceWith(this.productList(this.inTab(tab)));
+  }
+
+  private inTab(tab: FurnTab): ShopProduct[] {
+    return this.products.filter((p) => (tab === 'favs' ? this.favs.has(p.id) : productGroup(p, this.catalog) === tab));
   }
 
   private productList(items: ShopProduct[]): HTMLElement {
@@ -1167,13 +1329,26 @@ export class App {
     const list = items.filter((p) => (this.shopFilter === 'all' || p.source === this.shopFilter)
       && (!q || `${p.name} ${SHOP_LABEL[p.source]} ${this.catalog.categories[p.category]?.label}`.toLowerCase().includes(q)));
     return h('div', { class: 'dm-product-list' },
-      list.length ? list.map((p) => h('button', { class: 'dm-product pick', title: 'In den Raum setzen', onclick: () => this.addProduct(p) },
-        p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
+      list.length ? list.map((p) => h('div', {
+        class: 'dm-product pick', title: 'In den Raum setzen', role: 'button', tabindex: 0,
+        onclick: () => this.addProduct(p),
+        onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.stopPropagation(); this.addProduct(p); } },
+      },
+        productImage(p),
         h('div', { class: 'dm-product-text' },
           h('strong', {}, p.name),
           h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.size.map((v) => Math.round(v * 100)).join(' × ') + ' cm', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · ')),
           (p.variants?.length ?? 0) > 1 && h('span', { class: 'dm-dots', title: p.variants!.map((v) => v.name).join(', ') },
             p.variants!.slice(0, 8).map((v) => h('i', { style: `background:${v.color}` })))),
+        h('button', {
+          class: `dm-fav${this.favs.has(p.id) ? ' active' : ''}`, title: this.favs.has(p.id) ? 'Von der Merkliste nehmen' : 'Produkt merken',
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            this.toggleFav({ key: p.id, name: p.name, url: p.url, image: p.image || undefined, source: p.source, price: p.price });
+            if (this.furnTab === 'favs') this.renderMenu();
+            else (e.currentTarget as HTMLElement).classList.toggle('active', this.favs.has(p.id));
+          },
+        }, icon(ICON_HEART)),
         h('span', { class: 'dm-product-add' }, '+')))
         : h('p', { class: 'dm-muted small' }, 'Nichts gefunden.'));
   }
@@ -1287,15 +1462,28 @@ export class App {
       h('div', { class: 'dm-row three' },
         field('Drehung', numberInput(Math.round(o.rotation), -360, 720, (v) => update((x) => (x.rotation = ((v % 360) + 360) % 360), true), '°')),
         field('Über Boden', numberInput(cm(o.position[2]), 0, 300, (v) => update((x) => (x.position[2] = m(v)), true), 'cm'))),
-      o.product?.url && this.productCard(o.product),
+      o.product?.url && this.productCard(o.product, false),
       this.variantPicker(o),
-      field('Produkt-Link (IKEA, Amazon …)', h('input', {
-        class: 'dm-input', type: 'url', placeholder: 'https://…', value: o.product?.url ?? '',
-        onchange: (e: Event) => update((x) => {
-          const url = (e.target as HTMLInputElement).value.trim();
-          x.product = url ? { ...(x.product ?? {}), source: shopOf(url), name: x.product?.name || x.label, url, sku: x.product?.sku ?? '' } : null;
-        }, false).then(() => this.renderMenu()),
-      })),
+      o.product?.url && (() => {
+        const pr = o.product!;
+        const key = pr.catalog_id || pr.url;
+        const on = this.favs.has(key);
+        return h('div', { class: 'dm-row dm-product-actions' },
+          h('a', { class: 'dm-btn primary', href: this.shopLink(pr.url), target: '_blank', rel: 'sponsored noopener' }, 'Produkt ansehen'),
+          h('button', {
+            class: `dm-btn${on ? ' active' : ''}`,
+            onclick: () => { this.toggleFav({ key, name: o.label || pr.name, url: pr.url, image: pr.image, source: pr.source, price: pr.price }); this.renderMenu(); },
+          }, icon(ICON_HEART), on ? 'Gemerkt' : 'Produkt merken'));
+      })(),
+      h('details', { class: 'dm-details' },
+        h('summary', {}, o.product?.url ? 'Produkt-Link ändern' : 'Produkt-Link hinzufügen'),
+        h('input', {
+          class: 'dm-input', type: 'url', placeholder: 'https://…', value: o.product?.url ?? '',
+          onchange: (e: Event) => update((x) => {
+            const url = (e.target as HTMLInputElement).value.trim();
+            x.product = url ? { ...(x.product ?? {}), source: shopOf(url), name: x.product?.name || x.label, url, sku: x.product?.sku ?? '' } : null;
+          }, false).then(() => this.renderMenu()),
+        })),
       h('div', { class: 'dm-row' },
         h('button', { class: 'dm-btn', onclick: () => this.openMenu('color') }, 'Farbe'),
         h('button', { class: 'dm-btn', onclick: () => this.duplicateObject(o.id) }, 'Duplizieren'),
@@ -1414,7 +1602,7 @@ export class App {
       const coarse = matchMedia('(pointer: coarse)').matches;
       rows.push(h('div', { class: 'dm-floating-row placing' },
         h('span', { class: 'dm-floating-name' }, o?.label || 'Möbel'),
-        h('span', { class: 'dm-muted small' }, 'Pfeile: verschieben · Ring: drehen'),
+        h('span', { class: 'dm-muted small' }, 'Ziehen: verschieben · Bogen: drehen · Pfeil nach oben: Höhe'),
         h('button', { class: 'dm-btn small ghost', onclick: () => this.cancelPlacing() }, 'Abbrechen'),
         h('button', { class: 'dm-btn small primary', onclick: () => this.confirmPlacing() }, coarse ? 'Hier platzieren' : 'Platzieren (Enter)')));
       this.elToolbar.replaceChildren(...rows.filter(Boolean) as Node[]);
@@ -1428,12 +1616,9 @@ export class App {
       if (sel.kind === 'object') {
         const o = s.objects.find((x) => x.id === sel.id);
         name = o?.label || 'Möbel';
-        if (this.viewer.viewMode !== 'walk') {
-          items.push(
-            btn('✥', () => this.setGizmo('translate'), this.gizmoMode === 'translate' ? 'primary' : ''),
-            btn('⟳', () => this.setGizmo('rotate'), this.gizmoMode === 'rotate' ? 'primary' : ''));
-        }
-        items.push(btn('Farbe', () => this.openMenu('color')), btn('Maße', () => this.openMenu('furniture')), btn(icon(TRASH), () => this.deleteObject(sel.id), 'danger icon'));
+        if (this.viewer.viewMode !== 'walk') items.push(btn('90°', () => this.rotateBy(sel.id, 90)));
+        items.push(btn('Farbe', () => this.openMenu('color')), btn('Anpassen', () => this.editObject()),
+          btn('Kopie', () => this.duplicateObject(sel.id)), btn(icon(TRASH), () => this.deleteObject(sel.id), 'danger icon'));
       } else if (sel.kind === 'wall') {
         name = `Wand ${wallIndex(s, sel.id) + 1}`;
         items.push(btn('Farbe', () => this.openMenu('color')), btn('Paneele & Fenster', () => this.openMenu('style')));
@@ -1637,10 +1822,47 @@ function shopOf(url: string): Product['source'] {
 
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
-type FurnTab = 'regale' | 'moebel' | 'deko' | 'formen';
+type FurnTab = 'favs' | 'regale' | 'moebel' | 'deko' | 'formen';
+
+const ICON_HOME = '<path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-6h4v6"/>';
+const ICON_SAVE = '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>';
+const ICON_HEART = '<path d="M12 20s-7-4.4-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 2.5C19 15.6 12 20 12 20z"/>';
+const ICON_CART = '<path d="M4 5h2l2 10h10l2-7H7"/><circle cx="9.5" cy="19" r="1.3"/><circle cx="16.5" cy="19" r="1.3"/>';
+const ICON_CAMERA = '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>';
+const ICON_PLAN = '<path d="M4 4h16v16H4z"/><path d="M4 12h6M10 4v5M14 20v-7h6"/>';
+
+const FAV_KEY = 'dm3d_merkliste';
+
+/** Gemerktes Produkt (Merkliste, im Browser gespeichert). key = Eintrag der Produktliste oder der Link. */
+interface FavItem { key: string; name: string; url: string; image?: string; source: Product['source']; price?: number | null }
+
+function loadFavs(): Map<string, FavItem> {
+  const out = new Map<string, FavItem>();
+  try {
+    const v = JSON.parse(localStorage.getItem(FAV_KEY) || '[]');
+    if (Array.isArray(v)) {
+      for (const f of v) {
+        if (f && typeof f.key === 'string' && typeof f.url === 'string' && /^https?:\/\//.test(f.url)) {
+          out.set(f.key, { key: f.key, name: String(f.name ?? ''), url: f.url, image: typeof f.image === 'string' ? f.image : undefined, source: shopOf(f.url), price: typeof f.price === 'number' ? f.price : null });
+        }
+      }
+    }
+  } catch {
+    /* privater Modus */
+  }
+  return out;
+}
+
+function saveFavs(favs: Map<string, FavItem>): void {
+  try {
+    localStorage.setItem(FAV_KEY, JSON.stringify([...favs.values()].slice(0, 200)));
+  } catch {
+    /* privater Modus */
+  }
+}
 
 /** Bereich im Möbel-Menü: aus der Produkttabelle (Spalte Kategorie), sonst aus dem 3D-Modell. */
-function productGroup(p: ShopProduct, catalog: Catalog): Exclude<FurnTab, 'formen'> {
+function productGroup(p: ShopProduct, catalog: Catalog): 'regale' | 'moebel' | 'deko' {
   if (p.group === 'regale' || p.group === 'moebel' || p.group === 'deko') return p.group;
   if (p.category === 'shelf' || p.category === 'wall_shelf') return 'regale';
   if (catalog.categories[p.category]?.group === 'deko' || ['rug', 'plant', 'lamp'].includes(p.category)) return 'deko';
@@ -1674,4 +1896,13 @@ function forgetLocal(id: string): void {
   } catch {
     /* privater Modus */
   }
+}
+
+/** Produktbild; lädt es nicht, erscheint der Anfangsbuchstabe des Shops. */
+function productImage(p: { image?: string; source: Product['source'] }): HTMLElement {
+  const ph = () => h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·');
+  if (!p.image) return ph();
+  const img = h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) as HTMLImageElement;
+  img.addEventListener('error', () => img.replaceWith(ph()));
+  return img;
 }

@@ -25,6 +25,9 @@ export class Measure {
   private pending: THREE.Vector3 | null = null;
   showRoom = true;
   showSelection = true;
+  /** Maß einer Wand wurde angeklickt und geändert (Meter). */
+  onEditWall: ((index: number, meters: number) => void) | null = null;
+  onEditHeight: ((meters: number) => void) | null = null;
 
   constructor(container: HTMLElement, scene: THREE.Scene) {
     this.labels = new CSS2DRenderer();
@@ -72,7 +75,10 @@ export class Measure {
       const p1 = plan3(a[0] + n[0] * off, a[1] + n[1] * off, 0.02);
       const p2 = plan3(b[0] + n[0] * off, b[1] + n[1] * off, 0.02);
       dimLine(this.roomGroup, p1, p2, plan3(n[0], n[1]).multiplyScalar(0.08), ACCENT);
-      this.roomGroup.add(label(p1.clone().lerp(p2, 0.5), fmt(Math.hypot(b[0] - a[0], b[1] - a[1])), 'room'));
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const l = label(p1.clone().lerp(p2, 0.5), fmt(len), 'room');
+      editable(l.element, len, 30, 3000, (v) => this.onEditWall?.(i, v));
+      this.roomGroup.add(l);
     }
     // Raumhöhe in der ersten Ecke
     const c = poly[0];
@@ -82,7 +88,9 @@ export class Measure {
     const h1 = plan3(corner[0], corner[1], 0);
     const h2 = plan3(corner[0], corner[1], data.room.height);
     dimLine(this.roomGroup, h1, h2, plan3(n0[0], n0[1]).multiplyScalar(0.08), ACCENT);
-    this.roomGroup.add(label(h1.clone().lerp(h2, 0.5), `Höhe ${fmt(data.room.height)}`, 'room'));
+    const hl = label(h1.clone().lerp(h2, 0.5), `Höhe ${fmt(data.room.height)}`, 'room');
+    editable(hl.element, data.room.height, 180, 600, (v) => this.onEditHeight?.(v));
+    this.roomGroup.add(hl);
   }
 
   setRoomVisible(v: boolean): void {
@@ -206,6 +214,40 @@ function label(pos: THREE.Vector3, text: string, kind: string): CSS2DObject {
   const obj = new CSS2DObject(el);
   obj.position.copy(pos);
   return obj;
+}
+
+/** Maß anklickbar machen: wird zum Eingabefeld (cm), Enter übernimmt, Esc bricht ab. */
+export function editable(el: HTMLElement, meters: number, minCm: number, maxCm: number, commit: (meters: number) => void): void {
+  el.classList.add('dm-dim-edit');
+  el.title = 'Anklicken, um das Maß zu ändern';
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('click', () => {
+    if (el.querySelector('input')) return;
+    const text = el.textContent ?? '';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = String(minCm);
+    input.max = String(maxCm);
+    input.value = String(Math.round(meters * 100));
+    input.className = 'dm-dim-input';
+    el.replaceChildren(input, document.createTextNode(' cm'));
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      const v = Number(input.value);
+      el.textContent = text;
+      if (ok && Number.isFinite(v) && v >= minCm && v <= maxCm && Math.round(meters * 100) !== v) commit(v / 100);
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') finish(true);
+      else if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+  });
 }
 
 /** Maßlinie mit Endstrichen. tick: Richtung der Endstriche (null = keine). */
