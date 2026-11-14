@@ -43,6 +43,8 @@ function sharedMaterials() {
     glass: mat('glass', '#cfe6f2', { roughness: 0.05, opacity: 0.25 }),
     frame: mat('window_frame', '#f4f4f2', { roughness: 0.4 }),
     felt: mat('panel_felt', '#2b2b2b', { roughness: 1 }),
+    mirror: mat('mirror', '#e8eef2', { roughness: 0.03, metalness: 1 }),
+    print: mat('print', '#d9cfc2', { roughness: 0.8 }),
   };
 }
 type Shared = ReturnType<typeof sharedMaterials>;
@@ -254,6 +256,8 @@ function panel(p: Panel, wall: Wall, length: number, roomHeight: number, sh: Sha
 const ACCENT = 1;
 const LIGHT = 2;
 const CERAMIC = 4;
+const MIRROR = 5;
+const PRINT = 6;
 
 function legs(g: Geo, w: number, d: number, z1: number, inset = 0.05, size = 0.04, m = ACCENT): void {
   for (const sx of [-1, 1]) {
@@ -360,6 +364,97 @@ const plant: Builder = (g, w, d, h) => {
   g.sphere(0, 0, pot + (h - pot) * 0.5, r, r, (h - pot) / 2);
 };
 
+// ------------------------------------------------------------------ Deko und Kleinmöbel
+
+const cushion: Builder = (g, w, d, h) => g.sphere(0, 0, h / 2, w / 2, Math.max(d, 0.04) / 2, h / 2);
+
+const vase: Builder = (g, w, d, h) => {
+  const r = Math.min(w, d) / 2;
+  g.cylinder(0, 0, 0, h * 0.55, r * 0.75, r);
+  g.cylinder(0, 0, h * 0.55, h * 0.85, r, r * 0.45);
+  g.cylinder(0, 0, h * 0.85, h, r * 0.4, r * 0.5);
+};
+
+/** Bilderrahmen: Rahmen in der Hauptfarbe, Motiv hell. Vorderseite -y, hängt mit der Rückseite an der Wand. */
+const picture: Builder = (g, w, d, h) => {
+  const f = Math.min(0.04, w * 0.08);
+  g.box(-w / 2, w / 2, -d / 2, d / 2, 0, f);
+  g.box(-w / 2, w / 2, -d / 2, d / 2, h - f, h);
+  g.box(-w / 2, -w / 2 + f, -d / 2, d / 2, f, h - f);
+  g.box(w / 2 - f, w / 2, -d / 2, d / 2, f, h - f);
+  const m = f * 1.8; // Passepartout
+  g.box(-w / 2 + f, w / 2 - f, -d / 2 + 0.005, d / 2, f, h - f, LIGHT);
+  g.box(-w / 2 + m, w / 2 - m, -d / 2 + 0.002, -d / 2 + 0.006, m, h - m, PRINT);
+};
+
+const mirror: Builder = (g, w, d, h) => {
+  const f = Math.min(0.035, w * 0.08);
+  g.box(-w / 2, w / 2, -d / 2, d / 2, 0, f);
+  g.box(-w / 2, w / 2, -d / 2, d / 2, h - f, h);
+  g.box(-w / 2, -w / 2 + f, -d / 2, d / 2, f, h - f);
+  g.box(w / 2 - f, w / 2, -d / 2, d / 2, f, h - f);
+  g.box(-w / 2 + f, w / 2 - f, -d / 2 + 0.008, d / 2, f, h - f, MIRROR);
+};
+
+/** Vorhang: Falten als senkrechte Zylinder, oben eine Stange. */
+const curtain: Builder = (g, w, d, h) => {
+  g.cylinder(-w / 2 - 0.05, 0, h - 0.03, h - 0.01, 0.015, 0.015, ACCENT);
+  g.box(-w / 2 - 0.08, w / 2 + 0.08, -0.012, 0.012, h - 0.04, h - 0.016, ACCENT);
+  const r = Math.min(0.05, d / 2);
+  const n = Math.max(3, Math.round(w / (r * 1.6)));
+  for (let k = 0; k < n; k++) {
+    const x = -w / 2 + r + (k * (w - 2 * r)) / Math.max(1, n - 1);
+    g.cylinder(x, (k % 2) * r * 0.5, 0.01, h - 0.05, r, r);
+  }
+};
+
+/** Pendelleuchte: Schirm unten, Kabel bis zur Decke (Gesamthöhe h). */
+const pendant: Builder = (g, w, d, h) => {
+  const r = Math.min(w, d) / 2;
+  const shade = Math.min(0.35, h * 0.4);
+  g.cylinder(0, 0, 0, shade, r, r * 0.25);
+  g.sphere(0, 0, 0.04, r * 0.3, r * 0.3, r * 0.2, LIGHT);
+  g.cylinder(0, 0, shade, h - 0.03, 0.005, 0.005, ACCENT);
+  g.cylinder(0, 0, h - 0.03, h, 0.06, 0.06, ACCENT);
+};
+
+const tableLamp: Builder = (g, w, d, h) => {
+  const r = Math.min(w, d) / 2;
+  g.sphere(0, 0, h * 0.25, r * 0.55, r * 0.55, h * 0.25, CERAMIC);
+  g.cylinder(0, 0, h * 0.5, h * 0.6, 0.012, 0.012, ACCENT);
+  g.cylinder(0, 0, h * 0.58, h, r, r * 0.75);
+};
+
+const basket: Builder = (g, w, d, h) => {
+  const r = Math.min(w, d) / 2;
+  g.cylinder(0, 0, 0, h, r * 0.9, r);
+  g.cylinder(0, 0, h - 0.002, h, r * 0.85, r * 0.85, ACCENT);
+};
+
+const pouf: Builder = (g, w, d, h) => {
+  g.cylinder(0, 0, 0, h * 0.9, Math.min(w, d) / 2, Math.min(w, d) / 2);
+  g.sphere(0, 0, h * 0.9, Math.min(w, d) / 2, Math.min(w, d) / 2, h * 0.1);
+};
+
+const wallShelf: Builder = (g, w, d, h) => {
+  g.box(-w / 2, w / 2, -d / 2, d / 2, 0, h);
+};
+
+/** Kommode / Nachttisch mit Schubladen. */
+const dresser: Builder = (g, w, d, h) => {
+  const leg = h > 0.6 ? 0.08 : 0.04;
+  legs(g, w, d, leg, 0.04, 0.03);
+  g.box(-w / 2, w / 2, -d / 2 + 0.02, d / 2, leg, h);
+  const n = Math.max(1, Math.round((h - leg) / 0.22));
+  const dh = (h - leg) / n;
+  for (let k = 0; k < n; k++) {
+    const z0 = leg + k * dh + 0.004;
+    const z1 = leg + (k + 1) * dh - 0.004;
+    g.box(-w / 2 + 0.004, w / 2 - 0.004, -d / 2, -d / 2 + 0.02, z0, z1);
+    g.box(-0.08, 0.08, -d / 2 - 0.02, -d / 2, (z0 + z1) / 2 - 0.008, (z0 + z1) / 2 + 0.008, ACCENT);
+  }
+};
+
 const rug: Builder = (g, w, d, h) => g.box(-w / 2, w / 2, -d / 2, d / 2, 0, Math.max(h, 0.01));
 const box: Builder = (g, w, d, h) => g.box(-w / 2, w / 2, -d / 2, d / 2, 0, h);
 
@@ -380,6 +475,18 @@ const FURNITURE: Record<string, Builder> = {
   plant,
   rug,
   box,
+  cushion,
+  vase,
+  picture,
+  mirror,
+  curtain,
+  pendant,
+  table_lamp: tableLamp,
+  basket,
+  pouf,
+  wall_shelf: wallShelf,
+  dresser,
+  nightstand: dresser,
 };
 
 /** Ein Möbelstück als eigener Knoten (Position und Drehung am Knoten, damit der Editor es bewegen kann). */
@@ -388,7 +495,7 @@ export function buildObject(o: SceneObject, sh: Shared = sharedMaterials()): THR
   const g = new Geo();
   (FURNITURE[o.category] ?? box)(g, w, d, h);
   const mesh = meshNode(`${o.category}_${o.id}`, g,
-    [mat(`${o.id}_main`, o.color, { roughness: 0.75 }), sh.accent, sh.light, sh.green, sh.ceramic],
+    [mat(`${o.id}_main`, o.color, { roughness: 0.75 }), sh.accent, sh.light, sh.green, sh.ceramic, sh.mirror, sh.print],
     { dm_id: o.id, dm_type: 'object', dm_category: o.category, dm_label: o.label });
   mesh.position.copy(planToThree(o.position[0], o.position[1], o.position[2]));
   mesh.rotation.y = THREE.MathUtils.degToRad(o.rotation);

@@ -1,3 +1,4 @@
+import { inwardNormal } from './measure';
 import type { Catalog, Category, Panel, Scene, SceneObject } from './types';
 
 export const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -68,18 +69,53 @@ export function setWallLength(scene: Scene, index: number, newLength: number, pr
   return s;
 }
 
-export function newObject(scene: Scene, catalog: Catalog, category: Category): SceneObject {
-  const c = catalog.categories[category];
-  const [x, y] = roomCenter(scene);
+export interface NewObjectOptions {
+  /** Wand für Wandobjekte (Bilder, Spiegel, Vorhänge); ohne Angabe die längste Wand */
+  wall?: number;
+  label?: string;
+  size?: [number, number, number];
+  color?: string;
+  product?: SceneObject['product'];
+}
+
+export function newObject(scene: Scene, catalog: Catalog, category: Category, opt: NewObjectOptions = {}): SceneObject {
+  const c = catalog.categories[category] ?? catalog.categories.box;
+  const size = [...(opt.size ?? c.size)] as [number, number, number];
+  const H = scene.room.height;
+  let [x, y] = roomCenter(scene);
+  let z = c.z ?? 0;
+  let rotation = 0;
+  if (c.mount === 'ceiling') {
+    size[2] = Math.min(size[2], H - 0.3);
+    z = H - size[2];
+  } else if (c.mount === 'wall') {
+    let i = opt.wall ?? -1;
+    if (i < 0 || i >= scene.walls.length) {
+      const lengths = scene.walls.map((_, k) => wallLength(scene, k));
+      i = lengths.indexOf(Math.max(...lengths));
+    }
+    const p = scene.room.polygon;
+    const a = p[i];
+    const b = p[(i + 1) % p.length];
+    const n = inwardNormal(p, i);
+    // mehrere Bilder an derselben Wand nebeneinander statt übereinander
+    const same = scene.objects.filter((o) => o.category === category).length;
+    const t = 0.5 + (((same % 5) - 2) * 0.15);
+    const off = size[1] / 2 + 0.005;
+    x = a[0] + (b[0] - a[0]) * t + n[0] * off;
+    y = a[1] + (b[1] - a[1]) * t + n[1] * off;
+    rotation = ((Math.atan2(n[0], -n[1]) * 180) / Math.PI + 360) % 360;
+    size[2] = Math.min(size[2], H - z - 0.05);
+  }
   return {
     id: uid('obj'),
     category,
-    label: c.label,
-    position: [x, y, 0],
-    rotation: 0,
-    size: [...c.size] as [number, number, number],
-    color: c.color,
-    product: null,
+    label: opt.label ?? c.label,
+    position: [x, y, z],
+    rotation: Math.round(rotation * 10) / 10,
+    size,
+    color: opt.color ?? c.color,
+    product: opt.product ?? null,
   };
 }
 

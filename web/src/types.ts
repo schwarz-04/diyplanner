@@ -2,7 +2,9 @@
 
 export type Category =
   | 'sofa' | 'armchair' | 'chair' | 'dining_table' | 'coffee_table' | 'side_table' | 'desk'
-  | 'bed' | 'wardrobe' | 'shelf' | 'sideboard' | 'tv' | 'lamp' | 'plant' | 'rug' | 'box';
+  | 'bed' | 'wardrobe' | 'shelf' | 'sideboard' | 'tv' | 'lamp' | 'plant' | 'rug' | 'box'
+  | 'dresser' | 'nightstand' | 'pouf' | 'wall_shelf'
+  | 'cushion' | 'vase' | 'table_lamp' | 'basket' | 'picture' | 'mirror' | 'curtain' | 'pendant';
 
 export interface Opening {
   id: string;
@@ -36,6 +38,12 @@ export interface Product {
   name: string;
   url: string;
   sku: string;
+  /** Produktbild (URL) */
+  image?: string;
+  /** Preis in Euro, wie bei der Auswahl angegeben */
+  price?: number | null;
+  /** Eintrag aus der Produktliste der Webseite */
+  catalog_id?: string;
 }
 
 export interface SceneObject {
@@ -92,7 +100,15 @@ export interface Project {
 }
 
 export interface Catalog {
-  categories: Record<Category, { label: string; size: [number, number, number]; color: string }>;
+  categories: Record<Category, {
+    label: string; size: [number, number, number]; color: string;
+    /** deko = Dekoration, sonst Möbel */
+    group?: 'deko';
+    /** wall: hängt an der Wand, ceiling: hängt von der Decke */
+    mount?: 'wall' | 'ceiling';
+    /** Standardhöhe über dem Boden (Unterkante) */
+    z?: number;
+  }>;
   panels: Record<Panel['type'], { label: string; height: number; color: string }>;
   floor_materials: Record<string, { label: string; color: string }>;
 }

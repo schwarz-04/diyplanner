@@ -4,7 +4,7 @@ import { attachRoom, emptyRoom, replaceRoom, toHome } from './home';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
-  clone, cm, findPanel, m, newObject, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
+  clone, cm, findPanel, m, newObject, type NewObjectOptions, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
 } from './edits';
 import type { Catalog, Category, Home, Panel, Project, Scene, SceneObject, Selection } from './types';
 
@@ -465,9 +465,12 @@ export class App {
     this.apply(next, false);
   }
 
-  private async addObject(category: Category): Promise<void> {
+  private async addObject(category: Category, opt: NewObjectOptions = {}): Promise<void> {
     const next = clone(this.scene!);
-    const obj = newObject(next, this.catalog, category);
+    // Wandobjekte an die ausgewählte Wand hängen
+    const sel = this.selection;
+    const wall = sel?.kind === 'wall' ? wallIndex(next, sel.id) : sel?.kind === 'panel' ? findPanel(next, sel.id)?.wallIndex : undefined;
+    const obj = newObject(next, this.catalog, category, { wall: wall ?? this.viewer.facingWall(), ...opt });
     next.objects.push(obj);
     await this.apply(next, true);
     this.viewer.setSelection({ kind: 'object', id: obj.id }, true);
@@ -876,11 +879,15 @@ export class App {
     const s = this.scene!;
     const sel = this.selection;
     const o = sel?.kind === 'object' ? s.objects.find((x) => x.id === sel.id) : undefined;
+    const cats = Object.keys(this.catalog.categories) as Category[];
+    const chips = (list: Category[]) => h('div', { class: 'dm-grid' }, list.map((c) =>
+      h('button', { class: 'dm-chip', onclick: () => this.addObject(c) }, '+ ', this.catalog.categories[c].label)));
     const add = [
       h('h4', { style: o ? '' : 'margin-top:0' }, o ? 'Weiteres Möbel hinzufügen' : 'Möbel hinzufügen'),
-      h('div', { class: 'dm-grid three' },
-        (Object.keys(this.catalog.categories) as Category[]).map((c) =>
-          h('button', { class: 'dm-chip', onclick: () => this.addObject(c) }, '+ ', this.catalog.categories[c].label))),
+      chips(cats.filter((c) => this.catalog.categories[c].group !== 'deko')),
+      h('h4', {}, 'Deko'),
+      chips(cats.filter((c) => this.catalog.categories[c].group === 'deko')),
+      h('p', { class: 'dm-muted small' }, 'Bilder, Spiegel und Vorhänge kommen an die ausgewählte Wand, sonst an die Wand gegenüber der Kamera.'),
     ];
     if (!o) return [h('p', { class: 'dm-muted small' }, 'Tippe ein Möbelstück an, um Maße und Details zu ändern.'), ...add];
     const update = (mutate: (x: SceneObject) => void, rebuild: boolean) => {

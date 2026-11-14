@@ -179,6 +179,23 @@ export class Viewer {
     this.setSelection(prevSel && this.nodeFor(prevSel) ? prevSel : null, false);
   }
 
+  /** Wand des bearbeiteten Raums, auf die die Kamera am direktesten schaut (für Bilder, Spiegel …). */
+  facingWall(): number {
+    if (!this.sceneData || !this.root) return 0;
+    const cam = threeToPlan(this.root.worldToLocal(this.camera.position.clone()));
+    const poly = this.sceneData.room.polygon;
+    let best = 0, bestScore = -Infinity;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const nx = (b[1] - a[1]) / len, ny = -(b[0] - a[0]) / len; // Außennormale
+      const mx = (a[0] + b[0]) / 2 - cam[0], my = (a[1] + b[1]) / 2 - cam[1];
+      const score = (mx * nx + my * ny) / (Math.hypot(mx, my) || 1) + len * 0.02;
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+  }
+
   get activeRoom(): number {
     return this.active;
   }
