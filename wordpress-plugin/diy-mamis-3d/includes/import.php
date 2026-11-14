@@ -54,6 +54,7 @@ class DM3D_Import
     const GENERIC = [
         'regal' => 'shelf', 'regale' => 'shelf', 'möbel' => 'furniture', 'moebel' => 'furniture',
         'deko' => 'deko', 'dekoration' => 'deko', 'accessoires' => 'deko', 'wohnaccessoires' => 'deko',
+        'werkzeug' => 'tool', 'werkzeuge' => 'tool', 'zubehör' => 'tool', 'zubehoer' => 'tool',
     ];
 
     /** Farb- und Materialnamen -> Farbton. Längere Namen zuerst prüfen. */
@@ -177,12 +178,12 @@ class DM3D_Import
                 'depth' => $depth,
                 'height' => $height,
                 'color' => $variants[0]['color'] ?? '',
-                'group' => ['shelf' => 'regale', 'furniture' => 'moebel', 'deko' => 'deko'][self::GENERIC[self::norm($get('category'))] ?? ''] ?? '',
+                'group' => ['shelf' => 'regale', 'furniture' => 'moebel', 'deko' => 'deko', 'tool' => 'werkzeug'][self::GENERIC[self::norm($get('category'))] ?? ''] ?? '',
                 'variants' => wp_slash(wp_json_encode($variants, JSON_UNESCAPED_UNICODE)),
             ];
             if (isset($map['price'])) $meta['price'] = self::number($get('price'));
             foreach ($meta as $k => $v) update_post_meta($id, '_dm3d_' . $k, $v);
-            $expected_empty = ($category === 'rug' && !$meta['height']) || (($catalog[$category]['mount'] ?? '') === 'wall' && !$meta['depth']);
+            $expected_empty = $meta['group'] === 'werkzeug' || ($category === 'rug' && !$meta['height']) || (($catalog[$category]['mount'] ?? '') === 'wall' && !$meta['depth']);
             if ((!$meta['width'] || !$meta['depth'] || !$meta['height']) && !$expected_empty) {
                 $report['warnings'][] = "Zeile $line ($name): Maße unvollständig, fehlende Werte kommen aus dem Standardmodell.";
             }
@@ -236,6 +237,7 @@ class DM3D_Import
         }
         // Sammelbegriff (Regal, Möbel, Deko) oder leer: Modell aus dem Produktnamen
         $group = self::GENERIC[$v] ?? null;
+        if ($group === 'tool') return 'box'; // Werkzeug: kein 3D-Modell nötig
         $hit = self::find_word(self::norm($name), $group, $catalog);
         if ($hit !== null) return $hit;
         return ['shelf' => 'shelf'][$group] ?? null;

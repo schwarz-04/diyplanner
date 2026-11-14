@@ -2,7 +2,7 @@ import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
-import { TOOL_SETS, type Tool as DiyTool, type ToolContext } from './tools';
+import { TOOL_SETS, findToolProduct, type Tool as DiyTool, type ToolContext, type ToolSet } from './tools';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
@@ -79,6 +79,8 @@ export class App {
   private showDims = true;
   private showcase: Showcase | null = null;
   private products: ShopProduct[] = [];
+  /** Werkzeuge aus der Produktliste (Kategorie Werkzeug) */
+  private toolProducts: ShopProduct[] = [];
   private amazonTag = '';
   private productQuery = '';
   private furnTab: FurnTab | null = null;
@@ -107,9 +109,6 @@ export class App {
   private elToolbar = h('div', { class: 'dm-floating', hidden: true });
   private elPlan = h('div', { class: 'dm-plan' });
   private elSheet = h('div', { class: 'dm-sheet', hidden: true });
-  private elTools = h('div', { class: 'dm-sheet dm-tools', hidden: true });
-  /** Werkzeugliste für diese Auswahl weggeklickt */
-  private toolsDismissed = '';
   private elPlanHead = h('div', { class: 'dm-plan-head' });
   private elPlanBody = h('div', { class: 'dm-plan-body' });
   private elVersion = h('div', { class: 'dm-version' });
@@ -144,7 +143,7 @@ export class App {
             h('button', { class: 'dm-round', title: 'Hineinzoomen', onclick: () => this.viewer.zoom(0.8) }, '+'),
             h('button', { class: 'dm-round', title: 'Herauszoomen', onclick: () => this.viewer.zoom(1.25) }, '−'),
             h('button', { class: 'dm-round', title: 'Ganzen Raum zeigen', onclick: () => this.viewer.frame(false) }, icon(ICON_FIT)))),
-        h('aside', { class: 'dm-right' }, this.elSheet, this.elTools, this.elPlan)),
+        h('aside', { class: 'dm-right' }, this.elSheet, this.elPlan)),
       this.elOverlay,
       this.elCaption,
     );
@@ -224,7 +223,9 @@ export class App {
       this.elVersion.textContent = this.version ? `Raumplaner v${this.version}` : '';
       // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
       this.api.products().then((r) => {
-        this.products = r.products ?? [];
+        const all = r.products ?? [];
+        this.products = all.filter((p) => p.group !== 'werkzeug');
+        this.toolProducts = all.filter((p) => p.group === 'werkzeug');
         this.amazonTag = r.amazon_tag ?? '';
         this.renderMenu();
       }).catch(() => undefined);
@@ -780,6 +781,11 @@ export class App {
     const same = sel?.kind === 'object' && this.selection?.kind === 'object' && sel.id === this.selection.id;
     if (!same) this.furnAdd = true; // Möbel-Menü zeigt wieder den Katalog
     this.selection = sel;
+    // Produkt gewählt: rechts die Einkaufsliste zeigen (außer beim Speichern oder Rendern)
+    if (!same && sel?.kind === 'object' && this.wide && this.sheet !== 'save' && this.sheet !== 'render') {
+      this.sheet = 'shop';
+      this.renderSheet();
+    }
     this.renderMenu();
     this.renderFloating();
   }
@@ -806,31 +812,49 @@ export class App {
     return 'moebel';
   }
 
-  private renderTools(): void {
-    const ctx = this.wide ? this.toolContext() : null;
-    const sel = this.selection;
-    const key = ctx && sel ? `${ctx}|${'id' in sel ? sel.id : sel.kind}` : '';
-    if (key !== this.toolsDismissed) this.toolsDismissed = '';
-    if (!ctx || key === this.toolsDismissed) {
-      this.elTools.hidden = true;
-      this.elTools.replaceChildren();
-      return;
+  /** Menü „Werkzeug“: passende Werkzeuge und Anleitung zur Auswahl, sonst fürs ganze Projekt. */
+  private toolsMenu(): Child[] {
+    const ctx = this.toolContext();
+    const project = this.projectTools();
+    const out: Child[] = [];
+    if (ctx) {
+      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Passend zur Auswahl:'), this.toolSetView(TOOL_SETS[ctx], true));
+      const rest = project.filter((t) => t !== TOOL_SETS[ctx]);
+      if (rest.length) out.push(h('h4', {}, 'Weitere Arbeiten im Projekt'), ...rest.map((t) => this.toolSetView(t, false)));
+    } else if (project.length) {
+      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Für dein Projekt brauchst du diese Werkzeuge. Wähle ein Möbel, Regal oder eine Wand, um nur die passenden zu sehen.'),
+        ...project.map((t, i) => this.toolSetView(t, i === 0)));
+    } else {
+      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Noch nichts im Raum, das Werkzeug braucht. Alle Anleitungen:'),
+        ...Object.values(TOOL_SETS).map((t) => this.toolSetView(t, false)));
     }
-    const set = TOOL_SETS[ctx];
-    this.elTools.hidden = false;
-    this.elTools.replaceChildren(
-      h('div', { class: 'dm-sheet-head' }, h('strong', {}, icon(ICON_TOOL), ' Werkzeuge: ', set.title),
-        h('button', { class: 'dm-btn ghost small', title: 'Ausblenden', onclick: () => { this.toolsDismissed = key; this.renderTools(); } }, '✕')),
-      h('div', { class: 'dm-sheet-body' }, h('ul', { class: 'dm-toollist' }, set.tools.map((t) => this.toolRow(t)))));
+    out.push(h('button', { class: 'dm-btn small', style: 'margin-top:10px', onclick: () => this.printShopList() }, icon(ICON_PDF), ' Einkaufsliste mit Werkzeug und Anleitung als PDF'));
+    return out;
+  }
+
+  private toolSetView(set: ToolSet, open: boolean): HTMLElement {
+    return h('details', { class: 'dm-toolset', open },
+      h('summary', {}, set.title),
+      h('div', { class: 'dm-favs-list' }, set.tools.map((t) => this.toolRow(t))),
+      h('details', { class: 'dm-guide' }, h('summary', {}, 'Anleitung'),
+        h('ol', {}, set.guide.map((g) => h('li', {}, g)))));
   }
 
   private toolRow(t: DiyTool): HTMLElement {
-    const name = t.url ? h('a', { href: this.shopLink(t.url), target: '_blank', rel: 'sponsored noopener' }, t.name) : h('strong', {}, t.name);
-    return h('li', {}, name, t.note ? h('span', { class: 'dm-muted small' }, ` · ${t.note}`) : '');
+    const p = findToolProduct(t, this.toolProducts);
+    const text = h('span', { class: 'dm-product-text' }, h('strong', {}, p?.name || t.name),
+      h('span', { class: 'dm-muted small' }, [p ? SHOP_LABEL[p.source] : '', p?.price != null ? euro(p.price) : '', !p ? t.note ?? '' : t.name].filter(Boolean).join(' · ')));
+    if (!p) return h('div', { class: 'dm-favrow dm-toolrow' }, h('span', { class: 'dm-favlink' }, h('span', { class: 'dm-product-ph' }, '🔧'), text));
+    const key = `tool:${p.id}`;
+    return h('div', { class: 'dm-favrow dm-toolrow' },
+      h('a', { class: 'dm-favlink', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' }, productImage(p), text),
+      h('button', { class: `dm-fav${this.favs.has(key) ? ' active' : ''}`, title: 'Merken', onclick: () => {
+        this.toggleFav({ key, name: p.name, url: p.url, image: p.image, source: p.source, price: p.price }); this.renderMenu();
+      } }, icon(ICON_HEART)));
   }
 
-  /** Alle Werkzeuge für das ganze Projekt (für die PDF-Einkaufsliste). */
-  private projectTools(): { title: string; tools: DiyTool[] }[] {
+  /** Alle Arbeiten im ganzen Projekt. */
+  private projectTools(): ToolSet[] {
     const ctxs = new Set<ToolContext>();
     for (const r of this.home?.rooms ?? []) {
       for (const o of r.scene.objects) { const c = this.objectToolContext(o); if (c) ctxs.add(c); }
@@ -956,7 +980,6 @@ export class App {
     this.root.classList.toggle('dm-panel-open', !!this.menu && !!s);
     this.renderPlan();
     if (this.sheet === 'shop' && this.wide) this.renderSheet();
-    this.renderTools();
     this.renderDock();
     this.elPop.replaceChildren();
     this.elPop.hidden = !this.menu || !s;
@@ -973,6 +996,7 @@ export class App {
       color: () => this.colorMenu(),
       furniture: () => this.furnitureMenu(),
       style: () => this.styleMenu(),
+      tools: () => this.toolsMenu(),
       account: () => this.accountMenu(),
     }[this.menu]();
     requestAnimationFrame(() => this.updateShift());
@@ -1624,12 +1648,11 @@ export class App {
     this.renderSheet();
   }
 
-  private shopSheet(): SheetContent | null {
-    if (!this.home) return null;
-    // Gleiche Produkte zusammenfassen (Anzahl), Räume dazuschreiben
-    const groups = new Map<string, { key: string; p: Product; label: string; count: number; rooms: Set<string> }>();
+  /** Produkte der Einkaufsliste: gleiche zusammengefasst, mit Anzahl und Räumen. */
+  private shopRows(): { rows: ShopRow[]; hidden: number; total: number; missing: number } {
+    const groups = new Map<string, ShopRow>();
     let hidden = 0;
-    this.home.rooms.forEach((r, i) => {
+    (this.home?.rooms ?? []).forEach((r, i) => {
       for (const o of r.scene.objects) {
         if (!o.product?.url) continue;
         if (o.skipShop) { hidden++; continue; }
@@ -1643,13 +1666,30 @@ export class App {
     const rows = [...groups.values()];
     const priced = rows.filter((g) => g.p.price != null);
     const total = priced.reduce((sum, g) => sum + (g.p.price ?? 0) * g.count, 0);
-    const missing = rows.length - priced.length;
+    return { rows, hidden, total, missing: rows.length - priced.length };
+  }
+
+  private printShopList(): void {
+    const { rows, total, missing } = this.shopRows();
+    this.printList('shop', rows.map((g) => ({
+      name: g.label, url: g.p.url, image: g.p.image, source: g.p.source, price: g.p.price, count: g.count,
+      variant: g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '', rooms: [...g.rooms].join(', '),
+    })), total, missing);
+  }
+
+  private shopSheet(): SheetContent | null {
+    if (!this.home) return null;
+    const { rows, hidden, total, missing } = this.shopRows();
+    const priced = rows.filter((g) => g.p.price != null);
+    const sel = this.selection;
+    const so = sel?.kind === 'object' ? this.scene?.objects.find((x) => x.id === sel.id) : undefined;
+    const current = so?.product?.url ? `${so.product.url}|${so.product.variant ?? ''}` : '';
     const amazon = rows.some((g) => g.p.source === 'amazon');
     return {
       title: `Einkaufsliste${rows.length ? ` (${rows.reduce((n, g) => n + g.count, 0)})` : ''}`,
       body: [
         rows.length
-          ? h('div', { class: 'dm-favs-list' }, rows.map((g) => h('div', { class: 'dm-favrow' },
+          ? h('div', { class: 'dm-favs-list' }, rows.map((g) => h('div', { class: `dm-favrow${g.key === current ? ' current' : ''}` },
             h('a', { class: 'dm-favlink', href: this.shopLink(g.p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' },
               productImage(g.p),
               h('span', { class: 'dm-product-text' },
@@ -1669,10 +1709,7 @@ export class App {
           h('button', { class: 'dm-link', onclick: () => this.setSkipShop(null, false) }, 'Wieder anzeigen')),
         amazon && this.amazonTag && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
       ],
-      actions: rows.length ? [h('button', { class: 'dm-btn small', onclick: () => this.printList('shop', rows.map((g) => ({
-        name: g.label, url: g.p.url, image: g.p.image, source: g.p.source, price: g.p.price, count: g.count,
-        variant: g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '', rooms: [...g.rooms].join(', '),
-      })), total, missing) }, icon(ICON_PDF), ' Als PDF')] : [],
+      actions: [h('button', { class: 'dm-btn small', onclick: () => this.printShopList() }, icon(ICON_PDF), ' PDF mit Werkzeug und Anleitung')],
     };
   }
 
@@ -1704,8 +1741,14 @@ export class App {
     const sum = kind === 'shop' && total > 0
       ? `<p class="sum">Summe: ${esc(euro(total))}${missing ? ` <span class="m">plus ${missing} ohne Preisangabe</span>` : ''}</p>` : '';
     const tools = kind === 'shop' ? this.projectTools() : [];
-    const toolHtml = tools.length ? `<h2>Werkzeuge</h2>${tools.map((t) => `<h3>${esc(t.title)}</h3><ul>${t.tools.map((x) =>
-      `<li><strong>${esc(x.name)}</strong>${x.note ? ` <span class="m">· ${esc(x.note)}</span>` : ''}</li>`).join('')}</ul>`).join('')}` : '';
+    const toolLi = (x: DiyTool) => {
+      const p = findToolProduct(x, this.toolProducts);
+      if (!p) return `<li><strong>${esc(x.name)}</strong>${x.note ? ` <span class="m">· ${esc(x.note)}</span>` : ''}</li>`;
+      const link = this.shopLink(p.url);
+      return `<li class="tp">${p.image ? `<img src="${esc(p.image)}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">` : ''}<span><strong>${esc(x.name)}</strong>: ${esc(p.name)}${p.price != null ? ` · ${esc(euro(p.price))}` : ''}<br><a href="${esc(link)}">${esc(link)}</a></span></li>`;
+    };
+    const toolHtml = tools.length ? `<h2>Werkzeug und Anleitung</h2>${tools.map((t) => `<section><h3>${esc(t.title)}</h3><ul>${t.tools.map(toolLi).join('')}</ul>
+      <p class="gh">Anleitung</p><ol>${t.guide.map((g) => `<li>${esc(g)}</li>`).join('')}</ol></section>`).join('')}` : '';
     const amazon = this.amazonTag && rows.some((r) => r.source === 'amazon') ? '<p class="m">Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.</p>' : '';
     const html = `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>${esc(title)} – ${esc(project)}</title><style>
       body{font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;color:#2b2724;margin:28px}
@@ -1713,7 +1756,8 @@ export class App {
       .m{color:#7a716b;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:14px}
       td{border-bottom:1px solid #e6e0da;padding:8px 6px;vertical-align:top}td.img{width:64px}td.img img{width:60px;height:60px;object-fit:contain}
       td.p{text-align:right;white-space:nowrap}a{color:#b8456f;font-size:11px;word-break:break-all}.sum{text-align:right;font-size:15px;font-weight:600}
-      ul{margin:0;padding-left:18px}@media print{body{margin:12mm}.noprint{display:none}}
+      ul,ol{margin:0;padding-left:18px}li{margin:2px 0}li.tp{list-style:none;margin-left:-18px;display:flex;gap:8px;align-items:center}
+      li.tp img{width:40px;height:40px;object-fit:contain}.gh{font-weight:600;margin:8px 0 2px}section{break-inside:avoid;margin-bottom:10px}@media print{body{margin:12mm}.noprint{display:none}}
       .noprint{margin-bottom:16px}button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid #c9bfb7;background:#fff;cursor:pointer}
     </style></head><body>
       <div class="noprint"><button onclick="print()">Als PDF speichern / drucken</button></div>
@@ -2056,7 +2100,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ Menü, Farben, Stile
 
-type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style' | 'account';
+type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style' | 'tools' | 'account';
 type SheetId = 'save' | 'favs' | 'shop' | 'render';
 type Theme = 'light' | 'dark' | 'auto';
 
@@ -2085,6 +2129,7 @@ const MENUS: { id: MenuId; label: string; icon: string }[] = [
   { id: 'furniture', label: 'Möbel', icon: '<path d="M5 11V8a2 2 0 012-2h10a2 2 0 012 2v3"/><path d="M3 12a2 2 0 014 0v2h10v-2a2 2 0 014 0v5H3z"/><path d="M5 17v2M19 17v2"/>' },
   { id: 'style', label: 'Style', icon: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>' },
   { id: 'color', label: 'Farbe', icon: '<path d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.8 0-1.4-1-1.9 0-2.9s3 0 4.2-1.1C20.5 14 21 13 21 11c0-4.4-4-8-9-8z"/><circle cx="7.5" cy="11.5" r="1.1"/><circle cx="10" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>' },
+  { id: 'tools', label: 'Werkzeug', icon: '<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>' },
   { id: 'remove', label: 'Entfernen', icon: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>' },
 ];
 
@@ -2147,6 +2192,8 @@ function shopOf(url: string): Product['source'] {
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
 interface SheetContent { title: string; body: Child[]; actions?: Child[] }
+
+interface ShopRow { key: string; p: Product; label: string; count: number; rooms: Set<string> }
 
 interface PrintRow { name: string; url: string; image?: string; source: Product['source']; price?: number | null; count?: number; variant?: string; rooms?: string }
 

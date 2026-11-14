@@ -13,11 +13,12 @@
   --dm-soft2: #f8f6f2;
   --dm-accent-soft: #fbeff3;
   --dm-glass: rgba(255,255,255,.95);
+  --dm-row: rgba(255,255,255,.62);
   --dm-veil: rgba(250, 248, 245, .82);
   --dm-border-strong: #cfc7bc;
   --dm-note-bg: #fff6e6;
   --dm-note-border: #f0dcb5;
-  --dm-plan-bg: rgba(251, 250, 248, .62);
+  --dm-plan-bg: rgba(251, 250, 248, .45);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -468,10 +469,11 @@ body.dm3d-vollbild { margin: 0; padding: 0; background: #faf8f5; overflow: hidde
   --dm-soft2: #211f1d;
   --dm-accent-soft: #3d2530;
   --dm-glass: rgba(38,35,33,.94);
+  --dm-row: rgba(45,42,40,.6);
   --dm-veil: rgba(27,25,23,.8);
   --dm-note-bg: #3a2f1e;
   --dm-note-border: #5a4a2c;
-  --dm-plan-bg: rgba(33,31,29,.66);
+  --dm-plan-bg: rgba(33,31,29,.5);
   color-scheme: dark;
 }
 html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { background: #1b1917; }
@@ -562,3 +564,14 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-toollist { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 .dm-app .dm-toollist a { color: var(--dm-accent); font-weight: 600; }
 .dm-app .dm-sheet .dm-btn .dm-icon { width: 15px; height: 15px; vertical-align: -3px; }
+
+/* v0.12: Werkzeug-Menü, aktuelle Zeile der Einkaufsliste */
+.dm-app .dm-favrow.current { border-color: var(--dm-accent); box-shadow: 0 0 0 2px var(--dm-accent-soft); }
+.dm-app .dm-favrow, .dm-app.dm-wide .dm-pop .dm-product, .dm-app.dm-wide .dm-pop .dm-input { background: var(--dm-row); }
+.dm-app .dm-toolset { margin-bottom: 10px; }
+.dm-app .dm-toolset > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.dm-app .dm-toolset .dm-favs-list { padding: 0; }
+.dm-app .dm-toolrow .dm-product-ph { font-size: 16px; }
+.dm-app .dm-guide { margin-top: 6px; }
+.dm-app .dm-guide > summary { cursor: pointer; color: var(--dm-accent); font-weight: 600; font-size: 12px; }
+.dm-app .dm-guide ol { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }

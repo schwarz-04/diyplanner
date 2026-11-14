@@ -136,7 +136,7 @@ export interface ShopProduct {
   color: string;
   variants?: ProductVariant[];
   /** Bereich im Möbel-Menü (Spalte Kategorie der Produkttabelle) */
-  group?: 'regale' | 'moebel' | 'deko';
+  group?: 'regale' | 'moebel' | 'deko' | 'werkzeug';
 }
 
 export type Selection =

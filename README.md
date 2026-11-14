@@ -70,6 +70,9 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    Gibt es mehrere Farbvarianten, wählen Nutzer sie im Raumplaner aus. Gleicher Produktlink = Update.
    Steht in der Kategorie ein Sammelbegriff (Regal, Möbel, Deko), wählt der Import das 3D-Modell aus dem
    Produktnamen; im Möbel-Menü erscheinen die Produkte unter Regale / Möbel / Deko, filterbar nach Shop.
+   Zeilen mit der Kategorie `Werkzeug` erscheinen nicht im Möbel-Menü, sondern im Menü „Werkzeug“ und im
+   PDF der Einkaufsliste. Zugeordnet werden sie über den Namen (z. B. „Akkuschrauber“, „Bohrmaschine“,
+   „Leitungssucher“, „Malerkrepp“), die Stichwörter stehen in `web/src/tools.ts`.
 
    Bedienung: Am Desktop steht das Menü als Seitenleiste links, rechts der Grundriss (Möbel ziehen,
    Maße anklicken, Räume verschieben) und die Merkliste. Neue Möbel erscheinen halbtransparent und
