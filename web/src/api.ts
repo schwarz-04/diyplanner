@@ -1,5 +1,5 @@
 import type { AnalysisInput } from './analysis';
-import type { Catalog, Home, Project, Scene, ShopProduct } from './types';
+import type { Catalog, Home, Project, ProjectSummary, Scene, ShopProduct } from './types';
 
 /**
  * Schnittstelle zum WordPress-Plugin (REST-Namespace dm3d/v1, siehe wordpress-plugin/).
@@ -67,5 +67,25 @@ export class Api {
 
   saveScene(id: string, scene: Scene | Home) {
     return this.json<Project>(`/api/projects/${id}/scene`, 'PUT', scene);
+  }
+
+  /** Name und Vorschaubild speichern („Speichern“). */
+  saveMeta(id: string, meta: { name?: string; thumb?: string }) {
+    return this.json<Project>(`/api/projects/${id}/meta`, 'POST', meta);
+  }
+
+  copyProject(id: string, name: string) {
+    return this.json<{ id: string }>(`/api/projects/${id}/copy`, 'POST', { name });
+  }
+
+  deleteProject(id: string) {
+    return this.request<{ deleted: boolean }>(`/api/projects/${id}`, { method: 'DELETE' });
+  }
+
+  /** Eigene Projekte (angemeldet) und die im Browser gemerkten. */
+  myProjects(ids: string[]) {
+    // Basis kann schon ?rest_route=… enthalten (WordPress ohne schöne Permalinks)
+    const sep = this.base.includes('?') ? '&' : '?';
+    return this.request<{ projects: ProjectSummary[] }>(`/api/my-projects${sep}ids=${encodeURIComponent(ids.join(','))}`);
   }
 }

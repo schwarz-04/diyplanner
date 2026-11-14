@@ -22,6 +22,7 @@ class DM3D_Products
         'image' => ['Bild-Adresse (URL)', 'url'],
         'price' => ['Preis in €', 'number'],
         'category' => ['Art (3D-Modell)', 'category'],
+        'group' => ['Bereich im Möbel-Menü', 'group'],
         'width' => ['Breite in cm', 'number'],
         'depth' => ['Tiefe in cm', 'number'],
         'height' => ['Höhe in cm', 'number'],
@@ -89,6 +90,12 @@ class DM3D_Products
                         ($c['group'] ?? '') === 'deko' ? ' (Deko)' : '');
                 }
                 echo '</select><p class="description">Bestimmt die Form des 3D-Modells. Größe und Farbe kommen aus den Feldern unten.</p>';
+            } elseif ($type === 'group') {
+                echo '<select name="dm3d_group" id="dm3d_group">';
+                foreach (['' => 'Automatisch (nach Art)', 'regale' => 'Regale', 'moebel' => 'Möbel', 'deko' => 'Deko'] as $k => $l) {
+                    printf('<option value="%s"%s>%s</option>', esc_attr($k), selected($value, $k, false), esc_html($l));
+                }
+                echo '</select>';
             } elseif ($type === 'variants') {
                 $list = json_decode($value, true);
                 $text = is_array($list) ? implode(', ', array_map(function ($v) { return $v['name'] . ' ' . $v['color']; }, $list)) : '';
@@ -122,6 +129,7 @@ class DM3D_Products
             if ($type === 'url') $value = esc_url_raw(trim((string) $raw));
             elseif ($type === 'number') $value = $raw === '' ? '' : (string) max(0, (float) str_replace(',', '.', (string) $raw));
             elseif ($type === 'color') $value = sanitize_hex_color((string) $raw) ?: '';
+            elseif ($type === 'group') $value = in_array($raw, ['regale', 'moebel', 'deko'], true) ? $raw : '';
             elseif ($type === 'variants') {
                 $raw = sanitize_text_field((string) $raw);
                 $list = $raw === '' ? [] : DM3D_Import::parse_variants($raw, sanitize_hex_color((string) ($_POST['dm3d_color'] ?? '')) ?: '#c9b8a0');
@@ -183,7 +191,17 @@ class DM3D_Products
             'size' => $size,
             'color' => $variants[0]['color'] ?? $color,
             'variants' => $variants ?: [['name' => 'Standard', 'color' => $color]],
+            'group' => self::group($m('group'), $cat, $cats),
         ];
+    }
+
+    /** Bereich im Möbel-Menü: gespeichert (aus der Tabelle) oder aus dem 3D-Modell abgeleitet. */
+    public static function group(string $stored, string $cat, array $cats): string
+    {
+        if (in_array($stored, ['regale', 'moebel', 'deko'], true)) return $stored;
+        if (in_array($cat, ['shelf', 'wall_shelf'], true)) return 'regale';
+        if (($cats[$cat]['group'] ?? '') === 'deko' || in_array($cat, ['rug', 'plant', 'lamp'], true)) return 'deko';
+        return 'moebel';
     }
 
     /** Alle veröffentlichten Produkte für den Editor. */

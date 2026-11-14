@@ -99,6 +99,8 @@ export interface Project {
   error: string | null;
   version: number;
   kind?: string;
+  /** Vom Nutzer vergebener Projektname */
+  name?: string;
   /** Version 1: ein Raum (Scene), Version 2: Wohnung (Home). */
   scene: Scene | Home | null;
   /** Rohantwort der KI, solange daraus noch keine Szene gebaut wurde. */
@@ -131,6 +133,8 @@ export interface ShopProduct {
   size: [number, number, number];
   color: string;
   variants?: ProductVariant[];
+  /** Bereich im Möbel-Menü (Spalte Kategorie der Produkttabelle) */
+  group?: 'regale' | 'moebel' | 'deko';
 }
 
 export type Selection =
@@ -140,3 +144,14 @@ export type Selection =
   | { kind: 'floor' }
   | { kind: 'ceiling' }
   | null;
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  rooms: number;
+  room_names: string[];
+  /** Unix-Zeit */
+  updated: number;
+  /** JPEG als data:-URL oder leer */
+  thumb: string;
+}

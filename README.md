@@ -68,6 +68,12 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    Farbvarianten, Bild-URL` (optional `Preis`). Die Kategorie wählt das 3D-Modell (z. B. Sofa, Regal,
    Wandregal, Tischlampe), Farbnamen werden in Farbtöne übersetzt (eigene mit `Salbei #a9b9a6`).
    Gibt es mehrere Farbvarianten, wählen Nutzer sie im Raumplaner aus. Gleicher Produktlink = Update.
+   Steht in der Kategorie ein Sammelbegriff (Regal, Möbel, Deko), wählt der Import das 3D-Modell aus dem
+   Produktnamen; im Möbel-Menü erscheinen die Produkte unter Regale / Möbel / Deko, filterbar nach Shop.
+
+5. Projekte: Änderungen werden laufend gesichert. Über „Speichern“ bekommt ein Projekt Namen und
+   Vorschaubild, unter „Projekte“ lassen sich alle wieder öffnen, umbenennen, kopieren oder löschen.
+   Angemeldete Nutzer sehen ihre Projekte auf jedem Gerät, ohne Anmeldung merkt sie sich der Browser.
 
 Neue Räume können standardmäßig nur angemeldete Nutzer anlegen, weil jede Analyse KI-Guthaben
 kostet (grob 15–30 Cent). Das lässt sich in den Einstellungen abschalten. Bearbeiten kann jeder,

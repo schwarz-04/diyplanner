@@ -6,7 +6,7 @@ import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
   clone, cm, findPanel, m, newObject, type NewObjectOptions, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
 } from './edits';
-import type { Catalog, Category, Home, Panel, Product, Project, Scene, SceneObject, Selection, ShopProduct } from './types';
+import type { Catalog, Category, Home, Panel, Product, Project, ProjectSummary, Scene, SceneObject, Selection, ShopProduct } from './types';
 
 type Attrs = Record<string, any>;
 type Child = Node | string | null | undefined | false;
@@ -79,6 +79,10 @@ export class App {
   private products: ShopProduct[] = [];
   private amazonTag = '';
   private productQuery = '';
+  private furnTab: FurnTab | null = null;
+  private shopFilter: 'all' | Product['source'] = 'all';
+  /** Bei ausgewähltem Möbel: Katalog statt Eigenschaften zeigen */
+  private furnAdd = false;
 
   // DOM
   private elStatus = h('span', { class: 'dm-status' });
@@ -106,9 +110,10 @@ export class App {
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
           h('span', { class: 'dm-sep' }),
+          h('button', { class: 'dm-btn ghost', onclick: () => this.showSave() }, 'Speichern'),
+          h('button', { class: 'dm-btn ghost', onclick: () => this.showProjects() }, 'Projekte'),
           h('button', { class: 'dm-btn ghost', onclick: () => this.showShoppingList() }, 'Einkaufsliste'),
           h('button', { class: 'dm-btn ghost', onclick: () => this.renderImage() }, 'Foto-Rendering'),
-          h('button', { class: 'dm-btn ghost', onclick: () => this.showStart() }, 'Neuer Raum'),
           this.elStatus,
         ),
       ),
@@ -238,6 +243,7 @@ export class App {
         err,
         h('div', { class: 'dm-row end' },
           this.scene && h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
+          !this.scene && h('button', { class: 'dm-btn ghost', onclick: () => this.showProjects() }, 'Meine Projekte'),
           h('button', { class: 'dm-btn', disabled: !this.canCreate, onclick: () => this.create('demo', [], '') }, 'Demo-Raum öffnen'),
           go,
         ),
@@ -282,10 +288,8 @@ export class App {
       const r = card.getBoundingClientRect();
       if (stage.width > 760) sx = Math.max(0, (r.right - stage.left) / 2);
       else sy = Math.max(0, (stage.bottom - r.top) / 2);
-    } else if (this.menu && !this.elPop.hidden) {
-      const r = this.elPop.getBoundingClientRect();
-      sy = Math.min(Math.max(0, (stage.bottom - r.top) / 2), stage.height * 0.3);
     }
+    // Offene Menüs verschieben das Bild bewusst nicht, damit die Perspektive ruhig bleibt.
     this.viewer.setViewShift(sx, sy);
     this.elCaption.style.left = `calc(50% + ${sx}px)`;
   }
@@ -344,12 +348,156 @@ export class App {
       const url = new URL(location.href);
       url.searchParams.set(this.opts.projectParam ?? 'projekt', id);
       history.replaceState(null, '', url);
+      rememberLocal(id);
       this.viewer.setHome(this.home, 0, false);
       this.hideOverlay();
       this.select(null);
       this.setStatus('Gespeichert');
     } catch (err) {
       this.showError((err as Error).message);
+    }
+  }
+
+  // ================================================================== Speichern und Projekte
+
+  /** Kleines Vorschaubild der aktuellen Ansicht (JPEG). */
+  private thumbnail(): string {
+    try {
+      this.viewer.screenshot(); // frisches Bild ohne Auswahl rendern
+      const c = document.createElement('canvas');
+      const el = this.viewer.renderer.domElement;
+      const w = 480, hh = Math.round((480 * el.height) / Math.max(1, el.width));
+      c.width = w;
+      c.height = Math.min(hh, 360);
+      const ctx = c.getContext('2d')!;
+      ctx.drawImage(el, 0, (c.height - hh) / 2, w, hh);
+      return c.toDataURL('image/jpeg', 0.72);
+    } catch {
+      return '';
+    }
+  }
+
+  private showSave(): void {
+    if (this.opts.demo) {
+      this.demoNotice('Auf der Webseite werden Projekte gespeichert und lassen sich unter „Projekte“ wieder öffnen. In dieser Demo bleiben Änderungen nur im Browser.');
+      return;
+    }
+    if (!this.project || !this.scene) return;
+    const name = h('input', { class: 'dm-input', value: this.project.name || this.scene.room.name || '', placeholder: 'z. B. Wohnzimmer Herbst' }) as HTMLInputElement;
+    const err = h('p', { class: 'dm-error', hidden: true });
+    const save = async (asCopy: boolean) => {
+      const n = name.value.trim() || this.scene!.room.name || 'Mein Projekt';
+      this.hideOverlay();
+      this.viewer.setSelection(null, true);
+      const thumb = this.thumbnail();
+      try {
+        await this.persist();
+        if (asCopy) {
+          const { id } = await this.api.copyProject(this.project!.id, n);
+          await this.api.saveMeta(id, { name: n, thumb });
+          rememberLocal(id);
+          await this.openProject(id);
+          this.toast(`Als „${n}“ gespeichert`);
+        } else {
+          this.project = await this.api.saveMeta(this.project!.id, { name: n, thumb });
+          rememberLocal(this.project.id);
+          this.renderMenu();
+          this.toast('Gespeichert. Unter „Projekte“ öffnest du es wieder.');
+        }
+        this.setStatus('Gespeichert');
+      } catch (e) {
+        this.toast((e as Error).message);
+      }
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(false); });
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'Projekt speichern'),
+      h('p', { class: 'dm-muted' }, 'Änderungen werden laufend gesichert. Hier gibst du dem Projekt einen Namen, damit du es unter „Projekte“ wiederfindest.'),
+      field('Name', name),
+      err,
+      h('div', { class: 'dm-row end' },
+        h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
+        h('button', { class: 'dm-btn', disabled: !this.canCreate, title: 'Neues Projekt, das bisherige bleibt unverändert', onclick: () => save(true) }, 'Als Kopie speichern'),
+        h('button', { class: 'dm-btn primary', onclick: () => save(false) }, 'Speichern'))));
+    name.focus();
+    name.select();
+  }
+
+  private async showProjects(): Promise<void> {
+    if (this.opts.demo) {
+      this.demoNotice('Auf der Webseite findest du hier alle gespeicherten Projekte und öffnest sie wieder.');
+      return;
+    }
+    const back = () => (this.scene ? this.hideOverlay() : this.showStart());
+    this.showProgress('Projekte werden geladen');
+    let list: ProjectSummary[] = [];
+    try {
+      list = (await this.api.myProjects(localProjects())).projects;
+    } catch (e) {
+      this.showError((e as Error).message);
+      return;
+    }
+    const current = this.project?.id;
+    const date = (t: number) => (t ? new Date(t * 1000).toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+    const card = (p: ProjectSummary) => h('div', { class: `dm-project${p.id === current ? ' current' : ''}` },
+      h('button', { class: 'dm-project-thumb', title: 'Öffnen', onclick: () => (p.id === current ? this.hideOverlay() : this.openProject(p.id)) },
+        p.thumb ? h('img', { src: p.thumb, alt: '' }) : h('span', {}, '◆')),
+      h('div', { class: 'dm-project-text' },
+        h('strong', {}, p.name),
+        h('span', { class: 'dm-muted small' }, [p.rooms > 1 ? `${p.rooms} Räume` : p.room_names[0] || '1 Raum', date(p.updated), p.id === current ? 'geöffnet' : ''].filter(Boolean).join(' · '))),
+      h('div', { class: 'dm-project-actions' },
+        h('button', { class: 'dm-btn small primary', onclick: () => (p.id === current ? this.hideOverlay() : this.openProject(p.id)) }, 'Öffnen'),
+        h('button', { class: 'dm-btn small ghost', onclick: () => this.renameProject(p) }, 'Umbenennen'),
+        h('button', { class: 'dm-btn small ghost', disabled: !this.canCreate, onclick: () => this.copyProject(p) }, 'Kopie'),
+        h('button', { class: 'dm-btn small ghost danger', title: 'Löschen', onclick: () => this.deleteProject(p) }, icon(TRASH))));
+    this.showOverlay(h('div', { class: 'dm-card wide' },
+      h('div', { class: 'dm-row', style: 'justify-content:space-between;align-items:center' },
+        h('h2', { style: 'margin:0' }, 'Meine Projekte'),
+        h('button', { class: 'dm-btn primary', onclick: () => this.showStart() }, '+ Neues Projekt')),
+      list.length
+        ? h('div', { class: 'dm-projects' }, list.map(card))
+        : h('p', { class: 'dm-muted' }, 'Noch keine gespeicherten Projekte. Erstelle einen Raum oder öffne den Demo-Raum, er wird automatisch gesichert.'),
+      h('p', { class: 'dm-muted small' }, 'Ohne Anmeldung merkt sich nur dieser Browser deine Projekte. Angemeldet findest du sie auf jedem Gerät.'),
+      h('div', { class: 'dm-row end' }, h('button', { class: 'dm-btn ghost', onclick: back }, this.scene ? 'Zurück zum Raum' : 'Zurück'))));
+  }
+
+  private renameProject(p: ProjectSummary): void {
+    const name = window.prompt('Neuer Name', p.name);
+    if (name === null || !name.trim()) return;
+    this.api.saveMeta(p.id, { name: name.trim() }).then((r) => {
+      if (this.project?.id === p.id) { this.project = r; this.renderMenu(); }
+      this.showProjects();
+    }).catch((e) => this.toast((e as Error).message));
+  }
+
+  private async copyProject(p: ProjectSummary): Promise<void> {
+    try {
+      if (this.project?.id === p.id) await this.persist();
+      const { id } = await this.api.copyProject(p.id, `${p.name} (Kopie)`);
+      rememberLocal(id);
+      this.showProjects();
+    } catch (e) {
+      this.toast((e as Error).message);
+    }
+  }
+
+  private async deleteProject(p: ProjectSummary): Promise<void> {
+    if (!window.confirm(`„${p.name}“ wirklich löschen? Das lässt sich nicht rückgängig machen.`)) return;
+    try {
+      await this.api.deleteProject(p.id);
+      forgetLocal(p.id);
+      if (this.project?.id === p.id) {
+        this.project = null;
+        this.home = null;
+        const url = new URL(location.href);
+        url.searchParams.delete(this.opts.projectParam ?? 'projekt');
+        history.replaceState(null, '', url);
+        location.reload();
+        return;
+      }
+      this.showProjects();
+    } catch (e) {
+      this.toast((e as Error).message);
     }
   }
 
@@ -475,7 +623,7 @@ export class App {
     this.apply(next, false);
   }
 
-  private async addObject(category: Category, opt: NewObjectOptions = {}): Promise<void> {
+  private async addObject(category: Category, opt: NewObjectOptions = {}): Promise<string> {
     const next = clone(this.scene!);
     // Wandobjekte an die ausgewählte Wand hängen
     const sel = this.selection;
@@ -484,6 +632,33 @@ export class App {
     next.objects.push(obj);
     await this.apply(next, true);
     this.viewer.setSelection({ kind: 'object', id: obj.id }, true);
+    return obj.id;
+  }
+
+  /** Neues Teil: Menü schließen, halbtransparent einsetzen, Nutzer verschiebt/dreht und bestätigt. */
+  private async placeNew(category: Category, opt: NewObjectOptions = {}): Promise<void> {
+    this.menu = null;
+    this.furnAdd = false;
+    this.renderMenu();
+    const id = await this.addObject(category, opt);
+    this.setGizmo('translate');
+    this.viewer.startPlacing(id);
+    this.renderFloating();
+  }
+
+  private confirmPlacing(): void {
+    if (!this.viewer.placingId) return;
+    this.viewer.stopPlacing();
+    this.viewer.setSelection(null, true);
+    this.toast('Platziert');
+  }
+
+  private cancelPlacing(): void {
+    const id = this.viewer.placingId;
+    if (!id) return;
+    this.viewer.stopPlacing();
+    this.deleteObject(id);
+    this.renderFloating();
   }
 
   private async duplicateObject(id: string): Promise<void> {
@@ -538,7 +713,7 @@ export class App {
 
   private renderMenu(): void {
     const s = this.scene;
-    if (s) this.elTitle.textContent = s.room.name || 'Raumplaner';
+    if (s) this.elTitle.textContent = this.project?.name || s.room.name || 'Raumplaner';
     this.renderDock();
     this.elPop.replaceChildren();
     this.elPop.hidden = !this.menu || !s;
@@ -931,30 +1106,66 @@ export class App {
       }, h('i', { style: `background:${v.color}` }), v.name))));
   }
 
-  private productSection(): Child[] {
-    const out: Child[] = [h('h4', { style: 'margin-top:0' }, 'Produkte (IKEA, Amazon …)')];
-    if (this.products.length) {
-      const search = h('input', { class: 'dm-input', type: 'search', placeholder: 'Suchen, z. B. Regal oder IKEA', value: this.productQuery }) as HTMLInputElement;
-      search.addEventListener('input', () => {
-        this.productQuery = search.value;
-        const body = this.elPop.querySelector('.dm-product-list');
-        body?.replaceWith(this.productList());
-      });
-      out.push(search, this.productList());
-    } else {
-      out.push(h('p', { class: 'dm-muted small' }, this.opts.demo
-        ? 'Auf der Webseite erscheinen hier die empfohlenen Produkte. In der Demo kannst du ein Produkt per Link einfügen.'
-        : 'Noch keine empfohlenen Produkte hinterlegt. Du kannst ein Produkt per Link einfügen.'));
+  /** Katalog: Reiter Regale / Möbel / Deko (aus der Produkttabelle) und Eigene (einfache Formen, per Link). */
+  private catalogView(back: boolean): Child[] {
+    const counts: Record<FurnTab, number> = { regale: 0, moebel: 0, deko: 0, formen: 0 };
+    for (const p of this.products) counts[productGroup(p, this.catalog)]++;
+    if (!this.furnTab) this.furnTab = this.products.length ? (['moebel', 'regale', 'deko'] as FurnTab[]).find((t) => counts[t]) ?? 'formen' : 'formen';
+    const tab = this.furnTab;
+    const tabBtn = (t: FurnTab, label: string) => h('button', {
+      class: `dm-tab${tab === t ? ' active' : ''}`,
+      onclick: () => { this.furnTab = t; this.shopFilter = 'all'; this.productQuery = ''; this.renderMenu(); },
+    }, label, t !== 'formen' && counts[t] ? h('span', { class: 'dm-count' }, String(counts[t])) : '');
+    const out: Child[] = [];
+    if (back) out.push(h('button', { class: 'dm-btn small ghost', style: 'margin-bottom:8px', onclick: () => { this.furnAdd = false; this.renderMenu(); } }, '← Zurück zum ausgewählten Möbel'));
+    out.push(h('div', { class: 'dm-tabs', style: 'margin-top:0' },
+      tabBtn('regale', 'Regale'), tabBtn('moebel', 'Möbel'), tabBtn('deko', 'Deko'), tabBtn('formen', 'Eigene')));
+
+    if (tab === 'formen') {
+      const cats = Object.keys(this.catalog.categories) as Category[];
+      const chips = (list: Category[]) => h('div', { class: 'dm-grid' }, list.map((c) =>
+        h('button', { class: 'dm-chip', onclick: () => this.placeNew(c) }, '+ ', this.catalog.categories[c].label)));
+      out.push(
+        h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Einfache Formen in Standardgröße, oder ein Produkt aus einem beliebigen Shop per Link.'),
+        h('button', { class: 'dm-btn small', style: 'margin-bottom:10px', onclick: () => this.showAddByLink() }, '+ Produkt per Link'),
+        h('h4', {}, 'Möbel'),
+        chips(cats.filter((c) => this.catalog.categories[c].group !== 'deko')),
+        h('h4', {}, 'Deko'),
+        chips(cats.filter((c) => this.catalog.categories[c].group === 'deko')));
+      return out;
     }
+
+    const inTab = this.products.filter((p) => productGroup(p, this.catalog) === tab);
+    const shops = (['ikea', 'amazon', 'other'] as Product['source'][]).filter((src) => inTab.some((p) => p.source === src));
+    if (shops.length > 1) {
+      const chip = (f: 'all' | Product['source'], label: string) => h('button', {
+        class: `dm-pill${this.shopFilter === f ? ' active' : ''}`,
+        onclick: () => { this.shopFilter = f; this.refreshProductList(); this.renderMenu(); },
+      }, label);
+      out.push(h('div', { class: 'dm-pills' }, chip('all', 'Alle'), ...shops.map((src) => chip(src, SHOP_LABEL[src]))));
+    }
+    if (inTab.length > 6) {
+      const search = h('input', { class: 'dm-input', type: 'search', placeholder: 'Suchen …', value: this.productQuery }) as HTMLInputElement;
+      search.addEventListener('input', () => { this.productQuery = search.value; this.refreshProductList(); });
+      out.push(search);
+    }
+    out.push(this.productList(inTab));
     out.push(h('div', { class: 'dm-row', style: 'margin-top:8px' },
-      h('button', { class: 'dm-btn small', onclick: () => this.showAddByLink() }, '+ Produkt per Link'),
       h('button', { class: 'dm-btn small ghost', onclick: () => this.showShoppingList() }, 'Einkaufsliste')));
     return out;
   }
 
-  private productList(): HTMLElement {
+  private refreshProductList(): void {
+    const tab = this.furnTab;
+    const body = this.elPop.querySelector('.dm-product-list');
+    if (!tab || tab === 'formen' || !body) return;
+    body.replaceWith(this.productList(this.products.filter((p) => productGroup(p, this.catalog) === tab)));
+  }
+
+  private productList(items: ShopProduct[]): HTMLElement {
     const q = this.productQuery.trim().toLowerCase();
-    const list = this.products.filter((p) => !q || `${p.name} ${SHOP_LABEL[p.source]} ${this.catalog.categories[p.category]?.label}`.toLowerCase().includes(q));
+    const list = items.filter((p) => (this.shopFilter === 'all' || p.source === this.shopFilter)
+      && (!q || `${p.name} ${SHOP_LABEL[p.source]} ${this.catalog.categories[p.category]?.label}`.toLowerCase().includes(q)));
     return h('div', { class: 'dm-product-list' },
       list.length ? list.map((p) => h('button', { class: 'dm-product pick', title: 'In den Raum setzen', onclick: () => this.addProduct(p) },
         p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
@@ -968,7 +1179,7 @@ export class App {
   }
 
   private addProduct(p: ShopProduct): void {
-    this.addObject(p.category, {
+    this.placeNew(p.category, {
       label: p.name,
       size: [...p.size] as [number, number, number],
       color: p.variants?.[0]?.color ?? p.color,
@@ -977,7 +1188,6 @@ export class App {
         ...((p.variants?.length ?? 0) > 1 ? { variants: p.variants, variant: p.variants![0].name } : {}),
       },
     });
-    this.toast(`${p.name} eingefügt`);
   }
 
   /** Eigenes Produkt: Link einfügen, Maße selbst eintragen. */
@@ -1021,7 +1231,7 @@ export class App {
           const val = (el: HTMLInputElement, i: number) => (Number(el.value) > 0 ? m(Number(el.value)) : c.size[i]);
           const label = name.value.trim() || c.label;
           this.hideOverlay();
-          this.addObject(cat.value as Category, {
+          this.placeNew(cat.value as Category, {
             label, color: color.value,
             size: [val(w, 0), val(d, 1), val(hh, 2)],
             product: { source: shopOf(link), name: label, url: link, sku: '', price: price.value ? Number(price.value) : null },
@@ -1060,18 +1270,7 @@ export class App {
     const s = this.scene!;
     const sel = this.selection;
     const o = sel?.kind === 'object' ? s.objects.find((x) => x.id === sel.id) : undefined;
-    const cats = Object.keys(this.catalog.categories) as Category[];
-    const chips = (list: Category[]) => h('div', { class: 'dm-grid' }, list.map((c) =>
-      h('button', { class: 'dm-chip', onclick: () => this.addObject(c) }, '+ ', this.catalog.categories[c].label)));
-    const add = [
-      h('h4', { style: o ? '' : 'margin-top:0' }, o ? 'Weiteres Möbel hinzufügen' : 'Möbel hinzufügen'),
-      chips(cats.filter((c) => this.catalog.categories[c].group !== 'deko')),
-      h('h4', {}, 'Deko'),
-      chips(cats.filter((c) => this.catalog.categories[c].group === 'deko')),
-      h('p', { class: 'dm-muted small' }, 'Bilder, Spiegel und Vorhänge kommen an die ausgewählte Wand, sonst an die Wand gegenüber der Kamera.'),
-    ];
-    const shop = this.productSection();
-    if (!o) return [...shop, ...add];
+    if (!o || this.furnAdd) return this.catalogView(!!o);
     const update = (mutate: (x: SceneObject) => void, rebuild: boolean) => {
       const next = clone(s);
       mutate(next.objects.find((x) => x.id === o.id)!);
@@ -1101,7 +1300,7 @@ export class App {
         h('button', { class: 'dm-btn', onclick: () => this.openMenu('color') }, 'Farbe'),
         h('button', { class: 'dm-btn', onclick: () => this.duplicateObject(o.id) }, 'Duplizieren'),
         h('button', { class: 'dm-btn danger', onclick: () => this.deleteObject(o.id) }, 'Entfernen')),
-      ...add,
+      h('button', { class: 'dm-btn primary', style: 'width:100%;margin-top:12px', onclick: () => { this.furnAdd = true; this.renderMenu(); } }, '+ Weiteres Möbel oder Deko hinzufügen'),
     ];
   }
 
@@ -1209,6 +1408,19 @@ export class App {
         h('span', {}, 'Messen: zwei Punkte antippen'),
         h('button', { class: 'dm-btn small primary', onclick: () => this.setTool('select') }, 'Fertig')));
     }
+    const placing = this.viewer?.placingId;
+    if (placing && s && sel?.kind === 'object' && sel.id === placing) {
+      const o = s.objects.find((x) => x.id === placing);
+      const coarse = matchMedia('(pointer: coarse)').matches;
+      rows.push(h('div', { class: 'dm-floating-row placing' },
+        h('span', { class: 'dm-floating-name' }, o?.label || 'Möbel'),
+        h('span', { class: 'dm-muted small' }, 'Pfeile: verschieben · Ring: drehen'),
+        h('button', { class: 'dm-btn small ghost', onclick: () => this.cancelPlacing() }, 'Abbrechen'),
+        h('button', { class: 'dm-btn small primary', onclick: () => this.confirmPlacing() }, coarse ? 'Hier platzieren' : 'Platzieren (Enter)')));
+      this.elToolbar.replaceChildren(...rows.filter(Boolean) as Node[]);
+      this.elToolbar.hidden = false;
+      return;
+    }
     if (sel && s) {
       const btn = (label: string | Node, onclick: () => void, cls = '') => h('button', { class: `dm-btn small ${cls}`, onclick }, label);
       let name = '';
@@ -1260,6 +1472,11 @@ export class App {
   private onKey(e: KeyboardEvent): void {
     const target = e.target as HTMLElement;
     if (target.closest('input, textarea, select')) return;
+    if (this.viewer?.placingId) {
+      if (e.key === 'Enter') { e.preventDefault(); this.confirmPlacing(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); this.cancelPlacing(); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { this.cancelPlacing(); return; }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); this.redo(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && this.selection?.kind === 'object') this.deleteObject(this.selection.id);
@@ -1419,3 +1636,42 @@ function shopOf(url: string): Product['source'] {
 }
 
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
+
+type FurnTab = 'regale' | 'moebel' | 'deko' | 'formen';
+
+/** Bereich im Möbel-Menü: aus der Produkttabelle (Spalte Kategorie), sonst aus dem 3D-Modell. */
+function productGroup(p: ShopProduct, catalog: Catalog): Exclude<FurnTab, 'formen'> {
+  if (p.group === 'regale' || p.group === 'moebel' || p.group === 'deko') return p.group;
+  if (p.category === 'shelf' || p.category === 'wall_shelf') return 'regale';
+  if (catalog.categories[p.category]?.group === 'deko' || ['rug', 'plant', 'lamp'].includes(p.category)) return 'deko';
+  return 'moebel';
+}
+
+// ------------------------------------------------------------------ Projekte im Browser merken
+
+const LOCAL_KEY = 'dm3d_projects';
+
+function localProjects(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && /^[a-f0-9]{32}$/.test(x)).slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberLocal(id: string): void {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify([id, ...localProjects().filter((x) => x !== id)].slice(0, 50)));
+  } catch {
+    /* privater Modus */
+  }
+}
+
+function forgetLocal(id: string): void {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(localProjects().filter((x) => x !== id)));
+  } catch {
+    /* privater Modus */
+  }
+}

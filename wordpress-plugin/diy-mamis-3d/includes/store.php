@@ -90,6 +90,7 @@ class DM3D_Store
             'step' => $status['step'] ?? '',
             'error' => $status['error'] ?? null,
             'version' => $status['version'] ?? 0,
+            'name' => $status['name'] ?? '',
             'scene' => $scene,
             'analysis' => $scene ? null : self::read($dir, 'analysis.json'),
         ];

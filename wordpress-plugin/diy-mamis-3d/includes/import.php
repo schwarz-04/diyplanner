@@ -177,6 +177,7 @@ class DM3D_Import
                 'depth' => $depth,
                 'height' => $height,
                 'color' => $variants[0]['color'] ?? '',
+                'group' => ['shelf' => 'regale', 'furniture' => 'moebel', 'deko' => 'deko'][self::GENERIC[self::norm($get('category'))] ?? ''] ?? '',
                 'variants' => wp_slash(wp_json_encode($variants, JSON_UNESCAPED_UNICODE)),
             ];
             if (isset($map['price'])) $meta['price'] = self::number($get('price'));
