@@ -174,7 +174,7 @@ class DM3D_Products
         }
         return [
             'id' => (string) $id,
-            'name' => get_the_title($id),
+            'name' => html_entity_decode((string) get_post_field('post_title', $id, 'raw'), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
             'url' => $url ? self::affiliate_url($url) : '',
             'source' => self::source($url),
             'image' => $m('image'),

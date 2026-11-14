@@ -41,7 +41,19 @@ class DM3D_Import
         'kissen' => 'cushion', 'decke' => 'cushion', 'vase' => 'vase', 'korb' => 'basket', 'aufbewahrung' => 'basket',
         'bilderrahmen' => 'picture', 'rahmen' => 'picture', 'poster' => 'picture', 'bild' => 'picture', 'wandbild' => 'picture',
         'spiegel' => 'mirror', 'vorhang' => 'curtain', 'gardine' => 'curtain', 'pflanze' => 'plant', 'kunstpflanze' => 'plant',
+        'gewürzregal' => 'wall_shelf', 'eckregal' => 'shelf', 'aufsatzregal' => 'shelf', 'regaleinsatz' => 'shelf',
+        'tv-bank' => 'sideboard', 'tv bank' => 'sideboard', 'unterschrank' => 'sideboard', 'wickeltisch' => 'dresser',
+        'federholzrahmen' => 'box', 'lattenrost' => 'box', 'deckplatte' => 'box', 'tür' => 'box', 'matratze' => 'box',
+        'kerzenhalter' => 'vase', 'kerzenständer' => 'vase', 'blumentopf' => 'vase', 'blumentöpfe' => 'vase', 'übertopf' => 'vase',
+        'pflanzkübel' => 'vase', 'gewächshaus' => 'box', 'fußmatte' => 'rug', 'matte' => 'rug', 'körbe' => 'basket',
+        'fotorahmen' => 'picture', 'frame' => 'picture', 'blätter' => 'plant', 'tischleuchtenfuß' => 'table_lamp',
         'deko' => 'box',
+    ];
+
+    /** Sammelbegriffe in der Spalte Kategorie: Modell dann aus dem Produktnamen, nur aus diesen Gruppen. */
+    const GENERIC = [
+        'regal' => 'shelf', 'regale' => 'shelf', 'möbel' => 'furniture', 'moebel' => 'furniture',
+        'deko' => 'deko', 'dekoration' => 'deko', 'accessoires' => 'deko', 'wohnaccessoires' => 'deko',
     ];
 
     /** Farb- und Materialnamen -> Farbton. Längere Namen zuerst prüfen. */
@@ -60,6 +72,10 @@ class DM3D_Import
         'altrosa' => '#d8b8a8', 'rosa' => '#e6b8c0', 'pink' => '#d97a9a', 'senf' => '#c9a227', 'gelb' => '#e3c35a', 'orange' => '#d9813a',
         'gold' => '#c9a227', 'messing' => '#b8954a', 'kupfer' => '#b87333', 'silber' => '#c0c0c0', 'chrom' => '#d0d4d8',
         'edelstahl' => '#b9bcbf', 'glas' => '#cfe6f2', 'transparent' => '#e6eef2', 'marmor' => '#e8e5e0', 'beton' => '#9b9b98',
+        'weiß lasiert' => '#e3d8c6', 'eicheneff wlas' => '#dcc9ab', 'eicheneffekt weiß lasiert' => '#dcc9ab', 'wlas' => '#dcc9ab',
+        'braun nussbaum' => '#6e4b33', 'eiche dunkel' => '#7a5a3c', 'dunkle eiche' => '#7a5a3c',
+        'blasslila' => '#cbbfd8', 'blassrosa' => '#ecd2d0', 'hellgrün' => '#a9c79c', 'graublau' => '#5f6f80', 'blush' => '#e3b9b0',
+        'vernickelt' => '#b9bcbf', 'nickel' => '#b9bcbf', 'durchsichtig' => '#e6eef2', 'farblos' => '#e6eef2', 'klarglas' => '#e6eef2', 'klar' => '#e6eef2',
         'lila' => '#8e6c9e', 'violett' => '#7a5a95', 'flieder' => '#c3b1d6', 'lavendel' => '#b9a8d1', 'bunt' => '#c98f6a', 'mehrfarbig' => '#c98f6a',
     ];
 
@@ -131,12 +147,14 @@ class DM3D_Import
             $name = $get('name');
             if ($name === '') continue;
             $url = esc_url_raw($get('url'));
-            $category = self::category($get('category'), $catalog);
+            $category = self::category($get('category'), $name, $catalog);
             if ($category === null) {
-                $report['warnings'][] = "Zeile $line ($name): Kategorie „{$get('category')}“ unbekannt, als einfacher Quader dargestellt.";
+                $report['warnings'][] = "Zeile $line ($name): Kein passendes 3D-Modell gefunden, als einfacher Quader dargestellt.";
                 $category = 'box';
             }
-            $variants = self::variants($get('variants'), $catalog[$category]['color'] ?? '#c9b8a0', $unknown);
+            // Ohne Farbvarianten: Farbe aus dem Produktnamen („IVAR Schrank – Kiefer“), sonst Standardfarbe des Modells
+            $fallback = self::color_for(self::norm($name)) ?? ($catalog[$category]['color'] ?? '#c9b8a0');
+            $variants = self::variants($get('variants'), $fallback, $unknown);
             foreach ($unknown as $u) $report['warnings'][] = "Zeile $line ($name): Farbe „{$u}“ unbekannt, bitte mit Farbcode angeben (z. B. „{$u} #a9b9a6“).";
 
             $id = self::find($url, $name);
@@ -150,19 +168,21 @@ class DM3D_Import
                 if (!$id || is_wp_error($id)) continue;
                 $report['created']++;
             }
+            [$width, $depth, $height] = self::dims($category, $catalog, self::number($get('width')), self::number($get('depth')), self::number($get('height')));
             $meta = [
                 'url' => $url,
                 'image' => esc_url_raw($get('image')),
                 'category' => $category,
-                'width' => self::number($get('width')),
-                'depth' => self::number($get('depth')),
-                'height' => self::number($get('height')),
+                'width' => $width,
+                'depth' => $depth,
+                'height' => $height,
                 'color' => $variants[0]['color'] ?? '',
                 'variants' => wp_slash(wp_json_encode($variants, JSON_UNESCAPED_UNICODE)),
             ];
             if (isset($map['price'])) $meta['price'] = self::number($get('price'));
             foreach ($meta as $k => $v) update_post_meta($id, '_dm3d_' . $k, $v);
-            if (!$meta['width'] || !$meta['depth'] || !$meta['height']) {
+            $expected_empty = ($category === 'rug' && !$meta['height']) || (($catalog[$category]['mount'] ?? '') === 'wall' && !$meta['depth']);
+            if ((!$meta['width'] || !$meta['depth'] || !$meta['height']) && !$expected_empty) {
                 $report['warnings'][] = "Zeile $line ($name): Maße unvollständig, fehlende Werte kommen aus dem Standardmodell.";
             }
         }
@@ -202,22 +222,59 @@ class DM3D_Import
         return $map;
     }
 
-    private static function category(string $value, array $catalog): ?string
+    private static function category(string $value, string $name, array $catalog): ?string
     {
         $v = self::norm($value);
-        if ($v === '') return null;
-        if (isset($catalog[$v])) return $v;
-        foreach ($catalog as $key => $c) {
-            if (mb_strtolower($c['label']) === $v) return $key;
+        if ($v !== '' && !isset(self::GENERIC[$v])) {
+            if (isset($catalog[$v])) return $v;
+            foreach ($catalog as $key => $c) {
+                if (mb_strtolower($c['label']) === $v) return $key;
+            }
+            $hit = self::find_word($v, null, $catalog);
+            if ($hit !== null) return $hit;
         }
-        if (isset(self::CATEGORY_WORDS[$v])) return self::CATEGORY_WORDS[$v];
-        // Längstes passendes Wort gewinnt („Tischlampe LED“ -> Tischlampe, nicht Tisch)
-        $words = array_keys(self::CATEGORY_WORDS);
-        usort($words, function ($a, $b) { return mb_strlen($b) - mb_strlen($a); });
-        foreach ($words as $word) {
-            if (mb_strpos($v, $word) !== false) return self::CATEGORY_WORDS[$word];
+        // Sammelbegriff (Regal, Möbel, Deko) oder leer: Modell aus dem Produktnamen
+        $group = self::GENERIC[$v] ?? null;
+        $hit = self::find_word(self::norm($name), $group, $catalog);
+        if ($hit !== null) return $hit;
+        return ['shelf' => 'shelf'][$group] ?? null;
+    }
+
+    /** Erstes Stichwort im Text (bei gleicher Stelle das längere), passend zur Gruppe. */
+    private static function find_word(string $text, ?string $group, array $catalog): ?string
+    {
+        $deko_extra = ['rug', 'plant', 'lamp', 'box'];
+        $best = null;
+        foreach (self::CATEGORY_WORDS as $word => $key) {
+            $pos = mb_strpos($text, $word);
+            if ($pos === false) continue;
+            $is_deko = ($catalog[$key]['group'] ?? '') === 'deko';
+            if ($group === 'shelf' && !in_array($key, ['shelf', 'wall_shelf', 'box'], true)) continue;
+            if ($group === 'furniture' && $is_deko) continue;
+            if ($group === 'deko' && !$is_deko && !in_array($key, $deko_extra, true)) continue;
+            if ($best === null || $pos < $best[0] || ($pos === $best[0] && mb_strlen($word) > $best[1])) $best = [$pos, mb_strlen($word), $key];
         }
-        return null;
+        return $best[2] ?? null;
+    }
+
+    /**
+     * Fehlende Maße sinnvoll ergänzen:
+     * Teppich ohne Tiefe: „Höhe × Breite“ ist die Fläche. Bild/Spiegel ohne Breite: rund/quadratisch.
+     * Sonst ohne Tiefe oder Breite: rundes/quadratisches Teil, der andere Wert wird übernommen.
+     */
+    private static function dims(string $cat, array $catalog, string $w, string $d, string $h): array
+    {
+        $wall = ($catalog[$cat]['mount'] ?? '') === 'wall';
+        if ($cat === 'rug' && $d === '' && $h !== '') {
+            [$d, $h] = [$h, ''];
+        } elseif ($wall) {
+            if ($w === '' && $h !== '') $w = $h;
+        } elseif (in_array($cat, ['vase', 'basket', 'table_lamp', 'pendant', 'plant', 'pouf', 'side_table', 'lamp', 'cushion'], true)) {
+            // rundes Teil: Breite = Tiefe
+            if ($d === '' && $w !== '') $d = $w;
+            if ($w === '' && $d !== '') $w = $d;
+        }
+        return [$w, $d, $h];
     }
 
     /** Für das Formular im Produkt: unbekannte Farben bekommen die Ersatzfarbe. */
@@ -232,6 +289,15 @@ class DM3D_Import
     {
         $unknown = [];
         $out = [];
+        // „Farben: Weiß, Eiche | Größen/Varianten: …“ -> nur der Farbteil
+        if (strpos($value, '|') !== false) {
+            $parts = array_map('trim', explode('|', $value));
+            $value = $parts[0];
+            foreach ($parts as $p) {
+                if (preg_match('/^farben?\s*:/iu', $p)) { $value = $p; break; }
+            }
+        }
+        $value = preg_replace('/^\s*farben?\s*:\s*/iu', '', $value);
         foreach (preg_split('/\s*[,;|\n]\s*/u', $value) ?: [] as $part) {
             $part = trim($part);
             if ($part === '') continue;
