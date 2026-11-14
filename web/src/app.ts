@@ -89,6 +89,10 @@ export class App {
   /** Breites Fenster: Seitenleiste links, Grundriss rechts. Schmal: Leiste unten, Grundriss als Karte. */
   private wide = false;
   private planOpen: boolean | null = null;
+  /** Offene Liste rechts über dem Grundriss (breit) bzw. als Karte (schmal). */
+  private sheet: SheetId | null = null;
+  private theme: Theme = loadTheme();
+  private user = { name: '', loginUrl: '', logoutUrl: '', profileUrl: '' };
   private version = '';
 
   // DOM
@@ -101,12 +105,12 @@ export class App {
   private elOverlay = h('div', { class: 'dm-overlay', hidden: true });
   private elToolbar = h('div', { class: 'dm-floating', hidden: true });
   private elPlan = h('div', { class: 'dm-plan' });
-  private elFavs = h('div', { class: 'dm-favs', hidden: true });
+  private elSheet = h('div', { class: 'dm-sheet', hidden: true });
   private elPlanHead = h('div', { class: 'dm-plan-head' });
   private elPlanBody = h('div', { class: 'dm-plan-body' });
   private elVersion = h('div', { class: 'dm-version' });
-  private btnUndo = h('button', { class: 'dm-btn ghost', title: 'Rückgängig (Strg+Z)', onclick: () => this.undo() }, '↶');
-  private btnRedo = h('button', { class: 'dm-btn ghost', title: 'Wiederholen (Strg+Y)', onclick: () => this.redo() }, '↷');
+  private btnUndo = h('button', { class: 'dm-round', title: 'Rückgängig (Strg+Z)', onclick: () => this.undo() }, icon(ICON_UNDO));
+  private btnRedo = h('button', { class: 'dm-round', title: 'Wiederholen (Strg+Y)', onclick: () => this.redo() }, icon(ICON_REDO));
 
   constructor(private root: HTMLElement, private opts: AppOptions) {
     this.api = new Api(opts.apiBase, opts.nonce);
@@ -118,22 +122,25 @@ export class App {
       h('header', { class: 'dm-top' },
         h('div', { class: 'dm-brand' },
           this.opts.backUrl ? h('a', { class: 'dm-backlink', href: this.opts.backUrl, title: 'Zurück zur Webseite' }, '← ' + (this.opts.backLabel || 'Webseite')) : null,
-          h('button', { class: 'dm-btn ghost dm-home', title: 'Übersicht: alle Projekte, neues Projekt', onclick: () => this.showProjects() }, icon(ICON_HOME), h('span', {}, 'Home')),
           h('button', { class: 'dm-title-btn needs-project', title: 'Projekt umbenennen', onclick: () => this.showSave() }, this.elTitle)),
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
           h('span', { class: 'dm-sep needs-project' }),
-          h('button', { class: 'dm-btn ghost needs-project', title: 'Projekt mit Namen speichern', onclick: () => this.showSave() }, icon(ICON_SAVE), h('span', {}, 'Speichern')),
-          h('button', { class: 'dm-btn ghost needs-project', title: 'Gemerkte Produkte', onclick: () => this.showFavorites() }, icon(ICON_HEART), h('span', {}, 'Merkliste')),
-          h('button', { class: 'dm-btn ghost needs-project', onclick: () => this.showShoppingList() }, icon(ICON_CART), h('span', {}, 'Einkaufsliste')),
-          h('button', { class: 'dm-btn ghost needs-project', onclick: () => this.renderImage() }, icon(ICON_CAMERA), h('span', {}, 'Foto-Rendering')),
+          this.sheetBtn('save', ICON_SAVE, 'Speichern', 'Projekt mit Namen speichern'),
+          this.sheetBtn('favs', ICON_HEART, 'Merkliste', 'Gemerkte Produkte'),
+          this.sheetBtn('shop', ICON_CART, 'Einkaufsliste', 'Alle Produkte im Projekt'),
+          this.sheetBtn('render', ICON_CAMERA, 'Foto-Rendering', 'Fotorealistisches Bild'),
           this.elStatus,
         ),
       ),
       h('div', { class: 'dm-main' },
         h('aside', { class: 'dm-side' }, this.elDock, this.elPop),
-        h('div', { class: 'dm-stage' }, this.elCanvas, this.elToolbar, this.elVersion),
-        h('aside', { class: 'dm-right' }, this.elPlan, this.elFavs)),
+        h('div', { class: 'dm-stage' }, this.elCanvas, this.elToolbar, this.elVersion,
+          h('div', { class: 'dm-zoom needs-project' },
+            h('button', { class: 'dm-round', title: 'Hineinzoomen', onclick: () => this.viewer.zoom(0.8) }, '+'),
+            h('button', { class: 'dm-round', title: 'Herauszoomen', onclick: () => this.viewer.zoom(1.25) }, '−'),
+            h('button', { class: 'dm-round', title: 'Ganzen Raum zeigen', onclick: () => this.viewer.frame(false) }, icon(ICON_FIT)))),
+        h('aside', { class: 'dm-right' }, this.elSheet, this.elPlan)),
       this.elOverlay,
       this.elCaption,
     );
@@ -158,12 +165,30 @@ export class App {
     this.viewer = new Viewer(this.elCanvas, {
       onSelect: (sel) => this.select(sel),
       onObjectMoving: (id, pos, rot) => this.plan.updateObject(id, pos[0], pos[1], rot),
+      onWalk: (x, y, yaw) => this.plan.setViewer(x, y, yaw),
       onObjectMoved: (id, pos, rot) => this.objectMoved(id, pos, rot),
       onMeasured: () => this.renderMenu(),
       onRoomPick: (i) => this.switchRoom(i),
     });
     this.viewer.measure.onEditWall = (i, meters) => this.editWall(i, meters);
     this.viewer.measure.onEditHeight = (meters) => { this.rebuildWith((n) => (n.room.height = meters)); };
+    this.viewer.measure.onEditGap = (dx, dy, delta) => {
+      const sel = this.selection;
+      const o = sel?.kind === 'object' ? this.scene?.objects.find((v) => v.id === sel.id) : undefined;
+      if (!o) return;
+      const pos: [number, number, number] = [o.position[0] + dx * delta, o.position[1] + dy * delta, o.position[2]];
+      this.viewer.moveNode(o.id, pos);
+      this.objectMoved(o.id, pos, o.rotation);
+    };
+    this.viewer.measure.onEditElevation = (meters) => {
+      const sel = this.selection;
+      const o = sel?.kind === 'object' ? this.scene?.objects.find((v) => v.id === sel.id) : undefined;
+      if (!o) return;
+      const pos: [number, number, number] = [o.position[0], o.position[1], meters];
+      this.viewer.moveNode(o.id, pos);
+      this.objectMoved(o.id, pos, o.rotation);
+    };
+    this.applyTheme();
     this.renderDock();
     const layout = () => {
       const wide = this.root.clientWidth >= 1000;
@@ -191,6 +216,7 @@ export class App {
       this.canCreate = health.can_create ?? true;
       this.loginUrl = health.login_url ?? '';
       this.version = health.version ?? '';
+      this.user = { name: health.user ?? '', loginUrl: health.login_url ?? '', logoutUrl: health.logout_url ?? '', profileUrl: health.profile_url ?? '' };
       this.elVersion.textContent = this.version ? `Raumplaner v${this.version}` : '';
       // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
       this.api.products().then((r) => {
@@ -429,18 +455,23 @@ export class App {
   }
 
   private showSave(): void {
+    this.sheet = 'save';
+    this.renderSheet();
+  }
+
+  private saveSheet(): SheetContent | null {
     if (this.opts.demo) {
-      this.demoNotice('Auf der Webseite werden Projekte gespeichert und lassen sich unter „Projekte“ wieder öffnen. In dieser Demo bleiben Änderungen nur im Browser.');
-      return;
+      return { title: 'Projekt speichern', body: [h('p', { class: 'dm-muted' }, 'Auf der Webseite werden Projekte gespeichert und lassen sich über Home wieder öffnen. In dieser Demo bleiben Änderungen nur im Browser.')] };
     }
-    if (!this.project || !this.scene) return;
+    if (!this.project || !this.scene) return null;
     const name = h('input', { class: 'dm-input', value: this.project.name || this.scene.room.name || '', placeholder: 'z. B. Wohnzimmer Herbst' }) as HTMLInputElement;
-    const err = h('p', { class: 'dm-error', hidden: true });
     const save = async (asCopy: boolean) => {
       const n = name.value.trim() || this.scene!.room.name || 'Mein Projekt';
-      this.hideOverlay();
-      this.viewer.setSelection(null, true);
+      this.closeSheet();
+      const sel = this.selection;
+      this.viewer.setSelection(null, false);
       const thumb = this.thumbnail();
+      if (sel) this.viewer.setSelection(sel, false);
       try {
         await this.persist();
         if (asCopy) {
@@ -453,7 +484,7 @@ export class App {
           this.project = await this.api.saveMeta(this.project!.id, { name: n, thumb });
           rememberLocal(this.project.id);
           this.renderMenu();
-          this.toast('Gespeichert. Unter „Projekte“ öffnest du es wieder.');
+          this.toast('Gespeichert. Über Home öffnest du es wieder.');
         }
         this.setStatus('Gespeichert');
       } catch (e) {
@@ -461,17 +492,18 @@ export class App {
       }
     };
     name.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(false); });
-    this.showOverlay(h('div', { class: 'dm-card' },
-      h('h2', {}, 'Projekt speichern'),
-      h('p', { class: 'dm-muted' }, 'Änderungen werden laufend gesichert. Hier gibst du dem Projekt einen Namen, damit du es unter „Projekte“ wiederfindest.'),
-      field('Name', name),
-      err,
-      h('div', { class: 'dm-row end' },
-        h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
-        h('button', { class: 'dm-btn', disabled: !this.canCreate, title: 'Neues Projekt, das bisherige bleibt unverändert', onclick: () => save(true) }, 'Als Kopie speichern'),
-        h('button', { class: 'dm-btn primary', onclick: () => save(false) }, 'Speichern'))));
-    name.focus();
-    name.select();
+    setTimeout(() => { name.focus(); name.select(); }, 0);
+    return {
+      title: 'Projekt speichern',
+      body: [
+        h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Änderungen werden laufend gesichert. Mit Namen findest du das Projekt über Home wieder.'),
+        field('Name', name),
+      ],
+      actions: [
+        h('button', { class: 'dm-btn primary', onclick: () => save(false) }, 'Speichern'),
+        h('button', { class: 'dm-btn', disabled: !this.canCreate, title: 'Neues Projekt, das bisherige bleibt unverändert', onclick: () => save(true) }, 'Als Kopie'),
+      ],
+    };
   }
 
   private async showProjects(): Promise<void> {
@@ -766,13 +798,97 @@ export class App {
   }
 
   private renderDock(): void {
-    this.elDock.replaceChildren(...MENUS.map((m) =>
-      h('button', {
-        class: `dm-dock-btn${this.menu === m.id ? ' active' : ''}`,
-        title: m.label,
-        onclick: () => this.toggleMenu(m.id),
-      }, icon(m.icon), h('span', {}, m.label))));
+    const btn = (m: { id: MenuId; label: string; icon: string }) => h('button', {
+      class: `dm-dock-btn${this.menu === m.id ? ' active' : ''}`,
+      title: m.label,
+      onclick: () => this.toggleMenu(m.id),
+    }, icon(m.icon), h('span', {}, m.label));
+    this.elDock.replaceChildren(
+      ...MENUS.map(btn),
+      h('span', { class: 'dm-dock-spacer' }),
+      h('button', { class: 'dm-dock-btn dm-dock-home', title: 'Home: alle Projekte, neues Projekt', onclick: () => this.showProjects() }, icon(ICON_HOME), h('span', {}, 'Home')),
+      btn({ id: 'account', label: this.user.name ? 'Konto' : 'Konto', icon: ICON_USER }));
   }
+
+  // ------------------------------------------------------------------ Konto und Darstellung
+
+  private accountMenu(): Child[] {
+    const u = this.user;
+    const themeBtn = (t: Theme, label: string) => h('button', {
+      class: `dm-tab${this.theme === t ? ' active' : ''}`,
+      onclick: () => { this.theme = t; saveTheme(t); this.applyTheme(); this.renderMenu(); },
+    }, label);
+    return [
+      u.name
+        ? h('p', { style: 'margin-top:0' }, 'Angemeldet als ', h('strong', {}, u.name))
+        : h('p', { class: 'dm-muted', style: 'margin-top:0' }, 'Nicht angemeldet. Deine Projekte merkt sich nur dieser Browser.'),
+      h('div', { class: 'dm-col' },
+        h('button', { class: 'dm-btn', onclick: () => this.showProjects() }, icon(ICON_HOME), ' Meine Projekte'),
+        h('button', { class: 'dm-btn', onclick: () => this.showStart() }, '+ Neues Projekt'),
+        u.name && u.profileUrl && h('a', { class: 'dm-btn', href: u.profileUrl }, 'Profil bearbeiten'),
+        u.name && u.logoutUrl && h('a', { class: 'dm-btn ghost', href: u.logoutUrl }, 'Abmelden'),
+        !u.name && u.loginUrl && h('a', { class: 'dm-btn primary', href: u.loginUrl }, 'Anmelden')),
+      h('h4', {}, 'Darstellung'),
+      h('div', { class: 'dm-tabs', style: 'margin-top:0' }, themeBtn('light', 'Hell'), themeBtn('dark', 'Dunkel'), themeBtn('auto', 'Automatisch')),
+      this.version && h('p', { class: 'dm-muted small' }, `Raumplaner Version ${this.version}`),
+    ];
+  }
+
+  private applyTheme(): void {
+    const dark = this.theme === 'dark' || (this.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    this.root.classList.toggle('dm-dark', dark);
+    document.documentElement.classList.toggle('dm3d-dark', dark);
+    this.viewer?.setDark(dark);
+  }
+
+  // ------------------------------------------------------------------ Listen rechts (Speichern, Merkliste, Einkaufsliste, Rendering)
+
+  private sheetBtn(id: SheetId, ic: string, label: string, title: string): HTMLElement {
+    const b = h('button', { class: 'dm-btn ghost needs-project', 'data-sheet': id, title, onclick: () => this.toggleSheet(id) }, icon(ic), h('span', {}, label));
+    return b;
+  }
+
+  private toggleSheet(id: SheetId): void {
+    if (this.sheet === id && this.wide) { this.closeSheet(); return; }
+    this.sheet = id;
+    this.renderSheet();
+  }
+
+  private renderSheet(): void {
+    this.root.querySelectorAll('[data-sheet]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-sheet') === this.sheet && this.wide));
+    if (!this.sheet || !this.scene) {
+      this.elSheet.hidden = true;
+      this.elSheet.replaceChildren();
+      return;
+    }
+    const content = {
+      save: () => this.saveSheet(),
+      favs: () => this.favSheet(),
+      shop: () => this.shopSheet(),
+      render: () => this.renderSheetContent(),
+    }[this.sheet]();
+    if (!content) return;
+    const { title, body, actions } = content;
+    if (!this.wide) {
+      this.elSheet.hidden = true;
+      this.showOverlay(h('div', { class: 'dm-card' }, h('h2', {}, title), ...body,
+        h('div', { class: 'dm-row end' }, ...(actions ?? []), h('button', { class: 'dm-btn primary', onclick: () => this.closeSheet() }, 'Schließen'))));
+      return;
+    }
+    this.elSheet.hidden = false;
+    this.elSheet.replaceChildren(
+      h('div', { class: 'dm-sheet-head' }, h('strong', {}, title),
+        h('button', { class: 'dm-btn ghost small', title: 'Schließen', onclick: () => this.closeSheet() }, '✕')),
+      h('div', { class: 'dm-sheet-body' }, ...body, actions && actions.length ? h('div', { class: 'dm-row', style: 'margin-top:8px' }, ...actions) : null));
+  }
+
+  private closeSheet(): void {
+    const wasOverlay = !this.wide && !!this.sheet;
+    this.sheet = null;
+    this.renderSheet();
+    if (wasOverlay) this.hideOverlay();
+  }
+
 
   private renderMenu(): void {
     const s = this.scene;
@@ -780,6 +896,7 @@ export class App {
     this.root.classList.toggle('dm-empty', !s);
     this.root.classList.toggle('dm-panel-open', !!this.menu && !!s);
     this.renderPlan();
+    if (this.sheet === 'shop' && this.wide) this.renderSheet();
     this.renderDock();
     this.elPop.replaceChildren();
     this.elPop.hidden = !this.menu || !s;
@@ -787,7 +904,7 @@ export class App {
       this.updateShift();
       return;
     }
-    const def = MENUS.find((m) => m.id === this.menu)!;
+    const def = MENUS.find((m) => m.id === this.menu) ?? { id: 'account' as MenuId, label: 'Konto', icon: ICON_USER };
     const body: Child[] = {
       view: () => this.viewMenu(),
       room: () => this.roomMenu(),
@@ -796,6 +913,7 @@ export class App {
       color: () => this.colorMenu(),
       furniture: () => this.furnitureMenu(),
       style: () => this.styleMenu(),
+      account: () => this.accountMenu(),
     }[this.menu]();
     requestAnimationFrame(() => this.updateShift());
     this.elPop.append(
@@ -858,30 +976,32 @@ export class App {
         h('span', { class: 'dm-product-text' },
           h('strong', {}, f.name),
           h('span', { class: 'dm-muted small' }, [SHOP_LABEL[f.source], f.price != null ? euro(f.price) : ''].filter(Boolean).join(' · ')))),
-      h('button', { class: 'dm-btn small ghost', title: 'Von der Merkliste nehmen', onclick: () => { this.toggleFav(f); this.renderMenu(); if (!this.elOverlay.hidden) this.showFavorites(); } }, '✕'));
+      h('button', { class: 'dm-btn small ghost', title: 'Von der Merkliste nehmen', onclick: () => { this.toggleFav(f); this.renderMenu(); } }, '✕'));
   }
 
-  /** Merkliste rechts unter dem Grundriss (breites Fenster). */
+  /** Merkliste neu zeichnen, wenn sie offen ist. */
   private renderFavs(): void {
-    const list = [...this.favs.values()];
-    this.elFavs.hidden = !list.length || !this.scene;
-    this.elFavs.replaceChildren(
-      h('div', { class: 'dm-favs-head' }, icon(ICON_HEART), h('strong', {}, 'Gemerkte Produkte'), h('span', { class: 'dm-count' }, String(list.length))),
-      h('div', { class: 'dm-favs-list' }, list.map((f) => this.favRow(f))));
+    if (this.sheet === 'favs') this.renderSheet();
   }
 
   private showFavorites(): void {
+    this.sheet = 'favs';
+    this.renderSheet();
+  }
+
+  private favSheet(): SheetContent {
     const list = [...this.favs.values()];
-    this.showOverlay(h('div', { class: 'dm-card' },
-      h('h2', {}, 'Gemerkte Produkte'),
-      list.length
-        ? h('div', { class: 'dm-favs-list' }, list.map((f) => this.favRow(f)))
-        : h('p', { class: 'dm-muted' }, 'Noch nichts gemerkt. Tippe im Möbel-Menü auf das Herz oder bei einem Möbel im Raum auf „Produkt merken“.'),
-      list.length > 0 && h('p', { class: 'dm-muted small' }, 'Ein Klick öffnet das Produkt im Shop in einem neuen Tab. Die Liste merkt sich dieser Browser.'),
-      this.amazonTag && list.some((f) => f.source === 'amazon') && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
-      h('div', { class: 'dm-row end' },
-        list.length > 0 && h('button', { class: 'dm-btn', onclick: () => { this.hideOverlay(); this.furnTab = 'favs'; this.shopFilter = 'all'; this.productQuery = ''; this.openMenu('furniture'); this.furnAdd = true; this.renderMenu(); } }, 'In den Raum einfügen'),
-        h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
+    return {
+      title: `Merkliste${list.length ? ` (${list.length})` : ''}`,
+      body: [
+        list.length
+          ? h('div', { class: 'dm-favs-list' }, list.map((f) => this.favRow(f)))
+          : h('p', { class: 'dm-muted small' }, 'Noch nichts gemerkt. Tippe im Möbel-Menü auf das Herz oder bei einem Möbel auf „Produkt merken“.'),
+        list.length > 0 && h('p', { class: 'dm-muted small' }, 'Ein Klick öffnet das Produkt im Shop (neuer Tab).'),
+        this.amazonTag && list.some((f) => f.source === 'amazon') && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
+      ],
+      actions: list.length ? [h('button', { class: 'dm-btn small', onclick: () => { if (!this.wide) this.closeSheet(); this.furnTab = 'favs'; this.shopFilter = 'all'; this.productQuery = ''; this.furnAdd = true; this.openMenu('furniture'); } }, 'Gemerkte in den Raum einfügen')] : [],
+    };
   }
 
   // ------------------------------------------------------------------ Ansicht
@@ -889,7 +1009,8 @@ export class App {
   private setView(mode: ViewMode): void {
     if (this.tool === 'measure') this.setTool('select');
     this.viewer.setMode(mode);
-    if (mode === 'walk') this.menu = null;
+    if (mode === 'walk' && !this.wide) this.menu = null;
+    if (mode !== 'walk') this.plan.setViewer(null);
     this.renderMenu();
     this.renderFloating();
   }
@@ -1102,6 +1223,26 @@ export class App {
     this.renderFloating();
   }
 
+  /** Winkel des Möbels: anzeigen und frei eingeben. */
+  private angleInput(o: SceneObject): HTMLElement {
+    const input = h('input', { class: 'dm-angle', type: 'number', min: -360, max: 720, step: 1, value: String(Math.round(o.rotation)), title: 'Drehung in Grad' }) as HTMLInputElement;
+    input.addEventListener('change', () => {
+      const v = Number(input.value);
+      if (!Number.isFinite(v)) return;
+      this.rotateTo(o.id, v);
+    });
+    input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); });
+    return h('label', { class: 'dm-angle-wrap', title: 'Drehung in Grad' }, icon(ICON_ROTATE), input, '°');
+  }
+
+  private rotateTo(id: string, deg: number): void {
+    const next = clone(this.scene!);
+    const o = next.objects.find((x) => x.id === id);
+    if (!o) return;
+    o.rotation = ((Math.round(deg) % 360) + 360) % 360;
+    this.apply(next, true);
+  }
+
   private rotateBy(id: string, deg: number): void {
     const next = clone(this.scene!);
     const o = next.objects.find((x) => x.id === id);
@@ -1258,7 +1399,7 @@ export class App {
       counts[productGroup(p, this.catalog)]++;
       if (this.favs.has(p.id)) counts.favs++;
     }
-    if (!this.furnTab) this.furnTab = this.products.length ? (['moebel', 'regale', 'deko'] as FurnTab[]).find((t) => counts[t]) ?? 'formen' : 'formen';
+    if (!this.furnTab) this.furnTab = this.products.length ? (['deko', 'moebel', 'regale'] as FurnTab[]).find((t) => counts[t]) ?? 'formen' : 'formen';
     const tab = this.furnTab;
     const tabBtn = (t: FurnTab, label: string | Node) => h('button', {
       class: `dm-tab${tab === t ? ' active' : ''}`, title: t === 'favs' ? 'Gemerkte Produkte' : '',
@@ -1273,7 +1414,7 @@ export class App {
         h('button', { class: 'dm-btn small', onclick: () => this.editObject() }, 'Anpassen')));
     }
     out.push(h('div', { class: 'dm-tabs dm-tabs-tight', style: 'margin-top:0' },
-      tabBtn('favs', icon(ICON_HEART)), tabBtn('regale', 'Regale'), tabBtn('moebel', 'Möbel'), tabBtn('deko', 'Deko'), tabBtn('formen', 'Eigene')));
+      tabBtn('deko', 'Deko'), tabBtn('moebel', 'Möbel'), tabBtn('regale', 'Regale'), tabBtn('formen', 'Eigene'), tabBtn('favs', icon(ICON_HEART))));
 
     if (tab === 'formen') {
       const cats = Object.keys(this.catalog.categories) as Category[];
@@ -1300,7 +1441,8 @@ export class App {
         class: `dm-pill${this.shopFilter === f ? ' active' : ''}`,
         onclick: () => { this.shopFilter = f; this.refreshProductList(); this.renderMenu(); },
       }, label);
-      out.push(h('div', { class: 'dm-pills' }, chip('all', 'Alle'), ...shops.map((src) => chip(src, SHOP_LABEL[src]))));
+      const order: Product['source'][] = ['amazon', 'ikea', 'other'];
+      out.push(h('div', { class: 'dm-pills' }, ...order.filter((src) => shops.includes(src)).map((src) => chip(src, SHOP_LABEL[src])), chip('all', 'Alle')));
     }
     if (inTab.length > 6) {
       const search = h('input', { class: 'dm-input', type: 'search', placeholder: 'Suchen …', value: this.productQuery }) as HTMLInputElement;
@@ -1417,26 +1559,51 @@ export class App {
 
   /** Alle verlinkten Produkte der Wohnung mit Summe. */
   private showShoppingList(): void {
-    if (!this.home) return;
-    const rows: { room: string; o: SceneObject }[] = [];
+    this.sheet = 'shop';
+    this.renderSheet();
+  }
+
+  private shopSheet(): SheetContent | null {
+    if (!this.home) return null;
+    // Gleiche Produkte zusammenfassen (Anzahl), Räume dazuschreiben
+    const groups = new Map<string, { p: Product; label: string; count: number; rooms: Set<string> }>();
     this.home.rooms.forEach((r, i) => {
-      for (const o of r.scene.objects) if (o.product?.url) rows.push({ room: r.scene.room.name || `Raum ${i + 1}`, o });
+      for (const o of r.scene.objects) {
+        if (!o.product?.url) continue;
+        const key = `${o.product.url}|${o.product.variant ?? ''}`;
+        const g = groups.get(key) ?? { p: o.product, label: o.label || o.product.name, count: 0, rooms: new Set<string>() };
+        g.count++;
+        g.rooms.add(r.scene.room.name || `Raum ${i + 1}`);
+        groups.set(key, g);
+      }
     });
-    const total = rows.reduce((sum, r) => sum + (r.o.product?.price ?? 0), 0);
-    const missing = rows.filter((r) => r.o.product?.price == null).length;
-    const amazon = rows.some((r) => r.o.product?.source === 'amazon');
-    this.showOverlay(h('div', { class: 'dm-card' },
-      h('h2', {}, 'Einkaufsliste'),
-      rows.length
-        ? h('div', { class: 'dm-shoplist' }, rows.map(({ room, o }) => h('div', {},
-          this.productCard({ ...o.product!, name: o.label || o.product!.name }),
-          h('span', { class: 'dm-muted small dm-shoplist-room' }, room))))
-        : h('p', { class: 'dm-muted' }, 'Noch keine Produkte im Raum. Unter „Möbel“ findest du Produkte oder fügst eines per Link ein.'),
-      rows.length > 0 && h('p', { class: 'dm-shoplist-total' }, h('strong', {}, `Summe: ${euro(total)}`),
-        missing ? h('span', { class: 'dm-muted small' }, ` (ohne ${missing} Produkt${missing > 1 ? 'e' : ''} ohne Preis)`) : ''),
-      rows.length > 0 && h('p', { class: 'dm-muted small' }, 'Preise wie beim Einfügen angegeben, der aktuelle Preis steht im Shop.'),
-      amazon && this.amazonTag && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
-      h('div', { class: 'dm-row end' }, h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
+    const rows = [...groups.values()];
+    const priced = rows.filter((g) => g.p.price != null);
+    const total = priced.reduce((sum, g) => sum + (g.p.price ?? 0) * g.count, 0);
+    const missing = rows.length - priced.length;
+    const amazon = rows.some((g) => g.p.source === 'amazon');
+    return {
+      title: `Einkaufsliste${rows.length ? ` (${rows.reduce((n, g) => n + g.count, 0)})` : ''}`,
+      body: [
+        rows.length
+          ? h('div', { class: 'dm-favs-list' }, rows.map((g) => h('div', { class: 'dm-favrow' },
+            h('a', { class: 'dm-favlink', href: this.shopLink(g.p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' },
+              productImage(g.p),
+              h('span', { class: 'dm-product-text' },
+                h('strong', {}, (g.count > 1 ? `${g.count} × ` : '') + g.label),
+                h('span', { class: 'dm-muted small' }, [
+                  SHOP_LABEL[g.p.source], g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '',
+                  g.p.price != null ? euro(g.p.price * g.count) : 'Preis im Shop', [...g.rooms].join(', '),
+                ].filter(Boolean).join(' · ')))))))
+          : h('p', { class: 'dm-muted small' }, 'Noch keine Produkte im Projekt. Unter „Möbel“ findest du Produkte oder fügst eines per Link ein.'),
+        rows.length > 0 && (priced.length
+          ? h('p', { class: 'dm-shoplist-total' }, h('strong', {}, `Summe: ${euro(total)}`),
+            missing ? h('span', { class: 'dm-muted small' }, ` plus ${missing} Produkt${missing > 1 ? 'e' : ''} ohne Preisangabe`) : '')
+          : h('p', { class: 'dm-muted small' }, 'Für diese Produkte ist kein Preis hinterlegt, den aktuellen Preis zeigt der Shop.')),
+        priced.length > 0 && h('p', { class: 'dm-muted small' }, 'Preise wie hinterlegt, der aktuelle Preis steht im Shop.'),
+        amazon && this.amazonTag && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
+      ],
+    };
   }
 
   // ------------------------------------------------------------------ Möbel anpassen
@@ -1616,7 +1783,7 @@ export class App {
       if (sel.kind === 'object') {
         const o = s.objects.find((x) => x.id === sel.id);
         name = o?.label || 'Möbel';
-        if (this.viewer.viewMode !== 'walk') items.push(btn('90°', () => this.rotateBy(sel.id, 90)));
+        if (o) items.push(this.angleInput(o), btn('↻ 90°', () => this.rotateBy(sel.id, 90)));
         items.push(btn('Farbe', () => this.openMenu('color')), btn('Anpassen', () => this.editObject()),
           btn('Kopie', () => this.duplicateObject(sel.id)), btn(icon(TRASH), () => this.deleteObject(sel.id), 'danger icon'));
       } else if (sel.kind === 'wall') {
@@ -1639,17 +1806,34 @@ export class App {
 
   // ================================================================== Rendering
 
-  private async renderImage(): Promise<void> {
+  private renderImage(): void {
+    this.sheet = 'render';
+    this.renderSheet();
+  }
+
+  private renderSheetContent(): SheetContent {
     const demo = this.opts.demo;
     if (demo?.renderUrl) {
-      this.showOverlay(h('div', { class: 'dm-card wide' },
+      return { title: 'Foto-Rendering', body: [
         h('img', { src: demo.renderUrl, class: 'dm-render', alt: 'Gerendertes Bild des Raums' }),
-        h('p', { class: 'dm-muted small' }, 'Vorab gerendertes Beispielbild, zeigt den Raum vor deinen Änderungen. Das KI-Rendering der aktuellen Ansicht ist in Arbeit.'),
-        h('div', { class: 'dm-row end' },
-          h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
-      return;
+        h('p', { class: 'dm-muted small' }, 'Vorab gerendertes Beispielbild, zeigt den Raum vor deinen Änderungen.'),
+      ] };
     }
-    this.demoNotice('Das fotorealistische KI-Rendering der aktuellen Ansicht ist in Arbeit.');
+    return { title: 'Foto-Rendering', body: [
+      h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Das fotorealistische KI-Rendering der aktuellen Ansicht ist in Arbeit. Bis dahin kannst du die aktuelle 3D-Ansicht als Bild speichern.'),
+      h('button', { class: 'dm-btn', onclick: () => this.downloadView() }, 'Ansicht als Bild speichern'),
+    ] };
+  }
+
+  private downloadView(): void {
+    const sel = this.selection;
+    this.viewer.setSelection(null, false);
+    const url = this.viewer.screenshot();
+    if (sel) this.viewer.setSelection(sel, false);
+    const a = h('a', { href: url, download: `${(this.project?.name || this.scene?.room.name || 'raum').replace(/[^\w äöüÄÖÜß-]+/g, '')}.png` }) as HTMLAnchorElement;
+    document.body.append(a);
+    a.click();
+    a.remove();
   }
 
   // ================================================================== Hilfen
@@ -1750,18 +1934,36 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ Menü, Farben, Stile
 
-type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style';
+type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style' | 'account';
+type SheetId = 'save' | 'favs' | 'shop' | 'render';
+type Theme = 'light' | 'dark' | 'auto';
+
+function loadTheme(): Theme {
+  try {
+    const v = localStorage.getItem('dm3d_theme');
+    return v === 'dark' || v === 'auto' ? v : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function saveTheme(t: Theme): void {
+  try {
+    localStorage.setItem('dm3d_theme', t);
+  } catch {
+    /* privater Modus */
+  }
+}
 
 const TRASH = '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>';
 
 const MENUS: { id: MenuId; label: string; icon: string }[] = [
   { id: 'view', label: 'Ansicht', icon: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>' },
   { id: 'room', label: 'Raum', icon: '<path d="M4 4h16v16H4z"/><path d="M4 13h7v7M14 4v6h6"/>' },
-  { id: 'select', label: 'Auswahl', icon: '<path d="M6 3l12 7-5.5 1.5L10 17z"/><path d="M13 13l5 6"/>' },
-  { id: 'remove', label: 'Entfernen', icon: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>' },
-  { id: 'color', label: 'Farbe', icon: '<path d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.8 0-1.4-1-1.9 0-2.9s3 0 4.2-1.1C20.5 14 21 13 21 11c0-4.4-4-8-9-8z"/><circle cx="7.5" cy="11.5" r="1.1"/><circle cx="10" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>' },
   { id: 'furniture', label: 'Möbel', icon: '<path d="M5 11V8a2 2 0 012-2h10a2 2 0 012 2v3"/><path d="M3 12a2 2 0 014 0v2h10v-2a2 2 0 014 0v5H3z"/><path d="M5 17v2M19 17v2"/>' },
   { id: 'style', label: 'Style', icon: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>' },
+  { id: 'color', label: 'Farbe', icon: '<path d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.8 0-1.4-1-1.9 0-2.9s3 0 4.2-1.1C20.5 14 21 13 21 11c0-4.4-4-8-9-8z"/><circle cx="7.5" cy="11.5" r="1.1"/><circle cx="10" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>' },
+  { id: 'remove', label: 'Entfernen', icon: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>' },
 ];
 
 function icon(paths: string): HTMLElement {
@@ -1822,6 +2024,8 @@ function shopOf(url: string): Product['source'] {
 
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
+interface SheetContent { title: string; body: Child[]; actions?: Child[] }
+
 type FurnTab = 'favs' | 'regale' | 'moebel' | 'deko' | 'formen';
 
 const ICON_HOME = '<path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-6h4v6"/>';
@@ -1829,6 +2033,11 @@ const ICON_SAVE = '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"
 const ICON_HEART = '<path d="M12 20s-7-4.4-7-9.5A3.5 3.5 0 0112 8a3.5 3.5 0 017 2.5C19 15.6 12 20 12 20z"/>';
 const ICON_CART = '<path d="M4 5h2l2 10h10l2-7H7"/><circle cx="9.5" cy="19" r="1.3"/><circle cx="16.5" cy="19" r="1.3"/>';
 const ICON_CAMERA = '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>';
+const ICON_FIT = '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>';
+const ICON_ROTATE = '<path d="M20 12a8 8 0 11-2.3-5.6"/><path d="M20 4v4.5h-4.5"/>';
+const ICON_UNDO = '<path d="M9 7L4 12l5 5"/><path d="M4 12h10a6 6 0 010 12"/>';
+const ICON_REDO = '<path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 000 12"/>';
+const ICON_USER = '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c1.2-3.6 4-5.3 7-5.3s5.8 1.7 7 5.3"/>';
 const ICON_PLAN = '<path d="M4 4h16v16H4z"/><path d="M4 12h6M10 4v5M14 20v-7h6"/>';
 
 const FAV_KEY = 'dm3d_merkliste';

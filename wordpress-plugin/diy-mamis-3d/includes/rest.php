@@ -64,6 +64,9 @@ class DM3D_Rest
         return [
             'ok' => true,
             'version' => DM3D_VERSION,
+            'user' => is_user_logged_in() ? wp_get_current_user()->display_name : '',
+            'logout_url' => is_user_logged_in() ? wp_logout_url(wp_get_referer() ?: home_url()) : '',
+            'profile_url' => is_user_logged_in() ? admin_url('profile.php') : '',
             'analysis_available' => DM3D_Claude::available(),
             'can_create' => self::can_create(),
             'login_url' => wp_login_url(wp_get_referer() ?: home_url()),

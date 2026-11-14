@@ -32,6 +32,9 @@ export class PlanView {
   private active = 0;
   private selected: string | null = null;
   private objectNodes = new Map<string, SVGGElement>();
+  private viewerPos: { x: number; y: number; yaw: number } | null = null;
+  private viewerNode: SVGGElement | null = null;
+  private font = 0.2;
   private drag:
     | { kind: 'object'; id: string; pointerId: number; sx: number; sy: number; ox: number; oy: number; moved: boolean; x: number; y: number }
     | { kind: 'room'; index: number; pointerId: number; sx: number; sy: number; moved: boolean; node: SVGGElement; pos: Pt }
@@ -63,6 +66,32 @@ export class PlanView {
     node.setAttribute('transform', `translate(${w[0]} ${-w[1]}) rotate(${-(room.rotation + rotation)})`);
   }
 
+  /** Standort beim Begehen (gemeinsamer Grundriss, yaw 0 = Blick nach +y). null = ausblenden. */
+  setViewer(x: number | null, y = 0, yaw = 0): void {
+    this.viewerPos = x === null ? null : { x, y, yaw };
+    this.drawViewer();
+  }
+
+  private drawViewer(): void {
+    const v = this.viewerPos;
+    if (!v) {
+      this.viewerNode?.remove();
+      this.viewerNode = null;
+      return;
+    }
+    if (!this.viewerNode || !this.viewerNode.isConnected) {
+      const r = this.font * 1.1;
+      const g = el('g', { class: 'dm-plan-viewer', 'pointer-events': 'none' });
+      // Blickkegel nach oben (−y im SVG), Punkt in der Mitte
+      g.append(el('path', { d: `M0 0 L${-r * 1.4} ${-r * 3} A ${r * 3.3} ${r * 3.3} 0 0 1 ${r * 1.4} ${-r * 3} Z`, fill: ACCENT, 'fill-opacity': 0.22 }));
+      g.append(el('circle', { r: r * 0.55, fill: ACCENT, stroke: '#fff', 'stroke-width': r * 0.18 }));
+      this.svg.append(g);
+      this.viewerNode = g;
+    }
+    // yaw dreht gegen den Uhrzeigersinn im Grundriss = im Uhrzeigersinn negativ im SVG
+    this.viewerNode.setAttribute('transform', `translate(${v.x} ${-v.y}) rotate(${(-v.yaw * 180) / Math.PI})`);
+  }
+
   // ------------------------------------------------------------------ Zeichnen
 
   private render(): void {
@@ -83,10 +112,13 @@ export class PlanView {
     svg.setAttribute('viewBox', `${x0 - pad} ${-y1 - pad} ${x1 - x0 + pad * 2} ${y1 - y0 + pad * 2}`);
     const unit = Math.max(x1 - x0, y1 - y0) + pad * 2; // für Schriftgrößen
     const font = Math.max(0.15, unit * 0.03);
+    this.font = font;
     // bearbeiteten Raum zuletzt (liegt oben)
     const order = home.rooms.map((_, i) => i).sort((a, b) => Number(a === this.active) - Number(b === this.active));
     for (const i of order) svg.append(this.room(home.rooms[i], i, font));
     svg.classList.toggle('move-rooms', this.moveRooms);
+    this.viewerNode = null;
+    this.drawViewer();
   }
 
   private room(r: PlacedRoom, index: number, font: number): SVGGElement {

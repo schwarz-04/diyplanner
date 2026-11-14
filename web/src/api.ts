@@ -45,7 +45,7 @@ export class Api {
   }
 
   health() {
-    return this.request<{ ok: boolean; analysis_available: boolean; can_create: boolean; login_url?: string; version?: string }>('/api/health');
+    return this.request<{ ok: boolean; analysis_available: boolean; can_create: boolean; login_url?: string; version?: string; user?: string; logout_url?: string; profile_url?: string }>('/api/health');
   }
 
   catalog() {

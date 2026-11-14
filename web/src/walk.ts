@@ -92,6 +92,11 @@ export class WalkControls {
     this.joystick.addEventListener('pointercancel', endJoy);
   }
 
+  /** Standort im Grundriss und Blickrichtung (yaw 0 = +y). */
+  get position(): { x: number; y: number; yaw: number } {
+    return { x: this.x, y: this.y, yaw: this.yaw };
+  }
+
   /** Startet an (x, y) im gemeinsamen Grundriss mit Blick auf look. */
   enable(world: WalkWorld, blockers: Blocker[], start: { x: number; y: number; look: [number, number] }): void {
     this.setWorld(world, blockers);

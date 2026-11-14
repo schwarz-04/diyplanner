@@ -28,6 +28,12 @@ export class Measure {
   /** Maß einer Wand wurde angeklickt und geändert (Meter). */
   onEditWall: ((index: number, meters: number) => void) | null = null;
   onEditHeight: ((meters: number) => void) | null = null;
+  /** Abstand zur Wand eingegeben: Möbel um delta (Meter) in Richtung (dx, dy) des Grundrisses verschieben. */
+  onEditGap: ((dx: number, dy: number, delta: number) => void) | null = null;
+  /** Höhe über dem Boden eingegeben (Meter). */
+  onEditElevation: ((meters: number) => void) | null = null;
+  /** Winkel-Anzeige beim Drehen */
+  private angleLabel: CSS2DObject | null = null;
 
   constructor(container: HTMLElement, scene: THREE.Scene) {
     this.labels = new CSS2DRenderer();
@@ -138,8 +144,40 @@ export class Measure {
       const p1 = plan3(ox, oy, z + 0.01);
       const p2 = plan3(ox + dx * t, oy + dy * t, z + 0.01);
       dimLine(this.selGroup, p1, p2, plan3(-dy, dx).multiplyScalar(0.05), DARK, true);
-      this.selGroup.add(label(p1.clone().lerp(p2, 0.5), fmt(t), 'gap'));
+      const gl = label(p1.clone().lerp(p2, 0.5), fmt(t), 'gap');
+      editable(gl.element, t, 0, 3000, (v) => this.onEditGap?.(dx, dy, t - v));
+      this.selGroup.add(gl);
     }
+    // Höhe über dem Boden (Wandregale, Bilder, Hängelampen …)
+    const bottom = box.min.y;
+    if (bottom > 0.03) {
+      const p1 = plan3(maxX + 0.04, cy, 0);
+      const p2 = plan3(maxX + 0.04, cy, bottom);
+      dimLine(this.selGroup, p1, p2, plan3(0.05, 0), DARK, true);
+      const el = label(p1.clone().lerp(p2, 0.5), `↑ ${fmt(bottom)}`, 'gap');
+      editable(el.element, bottom, 0, 600, (v) => this.onEditElevation?.(v));
+      this.selGroup.add(el);
+    }
+  }
+
+  /** Winkel beim Drehen über dem Möbel zeigen (null = ausblenden). */
+  showAngle(node: THREE.Object3D | null, deg: number | null): void {
+    if (!node || deg === null) {
+      if (this.angleLabel) {
+        this.angleLabel.element.remove();
+        this.angleLabel.removeFromParent();
+        this.angleLabel = null;
+      }
+      return;
+    }
+    if (!this.angleLabel) {
+      this.angleLabel = label(new THREE.Vector3(), '', 'angle');
+      this.manualGroup.parent?.add(this.angleLabel);
+    }
+    const box = new THREE.Box3().setFromObject(node);
+    const c = box.getCenter(new THREE.Vector3());
+    this.angleLabel.position.set(c.x, box.max.y + 0.35, c.z);
+    this.angleLabel.element.textContent = `${Math.round(((deg % 360) + 360) % 360)}°`;
   }
 
   // ------------------------------------------------------------------ Frei messen

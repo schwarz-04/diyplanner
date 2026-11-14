@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { buildScene } from './build';
 import { Measure } from './measure';
 import { WalkControls, type Blocker } from './walk';
@@ -21,6 +22,8 @@ export interface ViewerEvents {
   /** Während des Ziehens (noch nicht gespeichert), z. B. für den Grundriss. */
   onObjectMoving?: (id: string, position: [number, number, number], rotation: number) => void;
   onMeasured?: (meters: number) => void;
+  /** Standort beim Begehen (gemeinsamer Grundriss). */
+  onWalk?: (x: number, y: number, yaw: number) => void;
   /** Ein anderer Raum der Wohnung wurde angetippt. */
   onRoomPick?: (index: number) => void;
 }
@@ -60,6 +63,8 @@ export class Viewer {
   /** > 1: Kamera beim Einpassen weiter weg (Startseite am Handy). */
   zoomOut = 1;
   private clock = new THREE.Clock();
+  private sun!: THREE.DirectionalLight;
+  private windowLights = new THREE.Group();
   private anims: { node: THREE.Object3D; y: number; t: number }[] = [];
   private fades: { mats: THREE.MeshStandardMaterial[]; from: THREE.Color[]; to: THREE.Color; t: number; ms: number }[] = [];
 
@@ -78,15 +83,19 @@ export class Viewer {
     this.scene.environmentIntensity = 0.55;
 
     this.scene.add(new THREE.HemisphereLight('#ffffff', '#c9b9a5', 0.9));
-    const sun = new THREE.DirectionalLight('#fff4e5', 1.6);
+    const sun = new THREE.DirectionalLight('#fff4e5', 1.8);
     sun.position.set(6, 10, 4);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.02;
     const cam = sun.shadow.camera as THREE.OrthographicCamera;
     cam.left = cam.bottom = -10;
     cam.right = cam.top = 10;
     this.scene.add(sun, sun.target);
+    this.sun = sun;
+    RectAreaLightUniformsLib.init();
+    this.scene.add(this.windowLights);
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.05, 200);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -177,7 +186,8 @@ export class Viewer {
         if ((o as THREE.Mesh).isMesh) {
           const mesh = o as THREE.Mesh;
           const type = findData(mesh)?.dm_type;
-          mesh.castShadow = type === 'object' || type === 'panel';
+          // Wände und Decke werfen Schatten, damit Sonnenlicht nur durch die Fenster fällt
+          mesh.castShadow = type === 'object' || type === 'panel' || type === 'wall' || type === 'ceiling';
           mesh.receiveShadow = true;
           for (const m of materials(mesh)) {
             if (m.transparent || m.opacity < 1) m.depthWrite = false;
@@ -197,6 +207,7 @@ export class Viewer {
     this.sceneData = home.rooms[this.active].scene;
     this.measure.attachTo(this.root);
     this.measure.setRoom(this.sceneData);
+    this.updateLights();
     this.updateWalkWorld();
     if (!keepCamera) this.frame(home.rooms.length > 1);
     this.setSelection(prevSel && this.nodeFor(prevSel) ? prevSel : null, false);
@@ -213,7 +224,7 @@ export class Viewer {
   startPlacing(id: string): void {
     this.stopPlacing();
     const node = this.nodes.get(id);
-    if (!node || this.mode === 'walk') return;
+    if (!node) return;
     const mats = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
     node.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -264,7 +275,7 @@ export class Viewer {
       this.handles = null;
     }
     const node = id ? this.nodes.get(id) : null;
-    if (!id || !node || this.mode === 'walk') return;
+    if (!id || !node) return;
     const { group, hit } = footprint(node);
     this.scene.add(group);
     this.handles = { id, group, hit };
@@ -316,7 +327,7 @@ export class Viewer {
   }
 
   private dragStart(e: PointerEvent): void {
-    if (e.target !== this.renderer.domElement || e.button !== 0 || this.mode === 'walk' || this.tool !== 'select' || this.drag) return;
+    if (e.target !== this.renderer.domElement || e.button !== 0 || this.tool !== 'select' || this.drag) return;
     const sel = this.selection;
     if (sel?.kind !== 'object') return;
     const node = this.nodes.get(sel.id);
@@ -370,8 +381,13 @@ export class Viewer {
     d.moved = true;
     if (d.kind === 'rotate') {
       const angle = Math.atan2(-(p.z - d.startWorld.z), p.x - d.startWorld.x);
-      const step = THREE.MathUtils.degToRad(e.shiftKey ? 1 : 5);
-      node.rotation.y = Math.round((d.startRot + angle - d.startAngle) / step) * step;
+      let deg = THREE.MathUtils.radToDeg(d.startRot + angle - d.startAngle);
+      deg = ((deg % 360) + 360) % 360;
+      // Einrasten bei 0°, 90°, 180°, 270° (Umschalt = ohne Einrasten), sonst ganze Grad
+      const snap = [0, 90, 180, 270, 360].find((v) => Math.abs(deg - v) < 7);
+      deg = snap !== undefined && !e.shiftKey ? snap % 360 : Math.round(deg);
+      node.rotation.y = THREE.MathUtils.degToRad(deg);
+      this.measure.showAngle(node, deg);
     } else {
       const target = d.startWorld.clone().add(p.sub(d.start));
       node.position.copy(node.parent ? node.parent.worldToLocal(target) : target);
@@ -383,6 +399,7 @@ export class Viewer {
     const d = this.drag;
     if (!d || e.pointerId !== d.pointerId) return;
     this.drag = null;
+    this.measure.showAngle(null, null);
     this.controls.enabled = !this.placing && this.mode !== 'walk';
     if (d.moved) this.commitTransform();
   }
@@ -396,6 +413,86 @@ export class Viewer {
     this.selectionBox?.update();
     this.measure.updateSelection();
     this.updateHandles();
+  }
+
+  setDark(dark: boolean): void {
+    (this.scene.background as THREE.Color).set(dark ? '#1f1d1b' : '#f4f1ec');
+  }
+
+  /** Hinein- (factor < 1) oder herauszoomen. Beim Begehen ändert sich der Blickwinkel. */
+  zoom(factor: number): void {
+    if (this.mode === 'walk') {
+      this.camera.fov = THREE.MathUtils.clamp(this.camera.fov * factor, 30, 90);
+      this.camera.updateProjectionMatrix();
+      return;
+    }
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const len = THREE.MathUtils.clamp(offset.length() * factor, this.controls.minDistance, this.controls.maxDistance);
+    this.camera.position.copy(this.controls.target).add(offset.setLength(len));
+    this.controls.update();
+  }
+
+  /**
+   * Tageslicht: Sonne scheint durch das größte Fenster des bearbeiteten Raums (Wände und Decke werfen Schatten),
+   * dazu ein weiches Flächenlicht in jeder Fensteröffnung.
+   */
+  private updateLights(): void {
+    for (const l of [...this.windowLights.children]) {
+      this.windowLights.remove(l);
+      (l as THREE.Light).dispose?.();
+    }
+    let best: { center: THREE.Vector3; out: THREE.Vector3; area: number } | null = null;
+    for (const r of this.rooms) {
+      const s = r.scene;
+      const poly = s.room.polygon;
+      s.walls.forEach((wall, i) => {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        if (!a || !b) return;
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        const u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        const n = [Math.sin(ang), -Math.cos(ang)]; // außen
+        const t = wall.thickness ?? 0.12;
+        for (const op of wall.openings) {
+          if (op.type !== 'window') continue;
+          const px = a[0] + u[0] * op.offset, py = a[1] + u[1] * op.offset;
+          const z = (op.sill ?? 0) + op.height / 2;
+          // Position im Raum (lokal), etwas vor der Öffnung
+          const local = planToThree(px - n[0] * 0.02, py - n[1] * 0.02, z);
+          const center = r.group.localToWorld(local.clone());
+          const outLocal = planToThree(px + n[0], py + n[1], z);
+          const out = r.group.localToWorld(outLocal).sub(center).normalize();
+          const light = new THREE.RectAreaLight('#fff3df', r.index === this.active ? 3.2 : 2, op.width, op.height);
+          light.position.copy(center);
+          light.lookAt(center.clone().sub(out));
+          this.windowLights.add(light);
+          const area = op.width * op.height + (r.index === this.active ? 100 : 0);
+          if (!best || area > best.area) best = { center: r.group.localToWorld(planToThree(px + n[0] * t, py + n[1] * t, z)), out, area };
+          void t;
+        }
+      });
+    }
+    const sun = this.sun;
+    const cam = sun.shadow.camera as THREE.OrthographicCamera;
+    if (best) {
+      const b = best as { center: THREE.Vector3; out: THREE.Vector3 };
+      // Sonne schräg von außen und oben, etwas seitlich, damit ein Lichtfleck auf den Boden fällt
+      const side = new THREE.Vector3(-b.out.z, 0, b.out.x).multiplyScalar(0.35);
+      const dir = b.out.clone().add(side).normalize();
+      sun.target.position.copy(b.center).addScaledVector(b.out, -1.5).setY(0);
+      sun.position.copy(sun.target.position).addScaledVector(dir, 7).setY(sun.target.position.y + 5.5);
+      cam.left = cam.bottom = -8;
+      cam.right = cam.top = 8;
+      cam.near = 0.5;
+      cam.far = 30;
+    } else {
+      sun.position.set(6, 10, 4);
+      sun.target.position.set(0, 0, 0);
+      cam.left = cam.bottom = -10;
+      cam.right = cam.top = 10;
+    }
+    cam.updateProjectionMatrix();
+    sun.target.updateMatrixWorld();
   }
 
   /** Wand des bearbeiteten Raums, auf die die Kamera am direktesten schaut (für Bilder, Spiegel …). */
@@ -450,8 +547,6 @@ export class Viewer {
     if (mode === 'walk') {
       if (!this.home) return;
       this.gizmo.detach();
-      this.stopPlacing();
-      this.setHandles(null);
       this.controls.enabled = false;
       this.controls.autoRotate = false;
       this.walk.enable(walkWorld(this.home), this.blockers(), walkStart(this.home.rooms[this.active]));
@@ -676,8 +771,11 @@ export class Viewer {
 
   private tick(): void {
     const dt = Math.min(0.1, this.clock.getDelta());
-    if (this.mode === 'walk') this.walk.update(dt);
-    else this.controls.update();
+    if (this.mode === 'walk') {
+      this.walk.update(dt);
+      const w = this.walk.position;
+      this.events.onWalk?.(w.x, w.y, w.yaw);
+    } else this.controls.update();
     this.runAnimations(dt);
     this.updateWallVisibility();
     this.renderer.render(this.scene, this.camera);
