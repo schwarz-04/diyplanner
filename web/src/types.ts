@@ -113,6 +113,19 @@ export interface Catalog {
   floor_materials: Record<string, { label: string; color: string }>;
 }
 
+/** Eintrag der Produktliste der Webseite (WordPress: Raumplaner-Produkte). Maße in Metern. */
+export interface ShopProduct {
+  id: string;
+  name: string;
+  url: string;
+  source: Product['source'];
+  image: string;
+  price: number | null;
+  category: Category;
+  size: [number, number, number];
+  color: string;
+}
+
 export type Selection =
   | { kind: 'object'; id: string }
   | { kind: 'wall'; id: string }

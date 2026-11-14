@@ -6,7 +6,7 @@ import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
   clone, cm, findPanel, m, newObject, type NewObjectOptions, newPanel, roomArea, setWallLength, uid, wallIndex, wallLength,
 } from './edits';
-import type { Catalog, Category, Home, Panel, Project, Scene, SceneObject, Selection } from './types';
+import type { Catalog, Category, Home, Panel, Product, Project, Scene, SceneObject, Selection, ShopProduct } from './types';
 
 type Attrs = Record<string, any>;
 type Child = Node | string | null | undefined | false;
@@ -76,6 +76,9 @@ export class App {
   private tool: Tool = 'select';
   private showDims = true;
   private showcase: Showcase | null = null;
+  private products: ShopProduct[] = [];
+  private amazonTag = '';
+  private productQuery = '';
 
   // DOM
   private elStatus = h('span', { class: 'dm-status' });
@@ -103,6 +106,7 @@ export class App {
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
           h('span', { class: 'dm-sep' }),
+          h('button', { class: 'dm-btn ghost', onclick: () => this.showShoppingList() }, 'Einkaufsliste'),
           h('button', { class: 'dm-btn ghost', onclick: () => this.renderImage() }, 'Foto-Rendering'),
           h('button', { class: 'dm-btn ghost', onclick: () => this.showStart() }, 'Neuer Raum'),
           this.elStatus,
@@ -133,6 +137,12 @@ export class App {
       this.analysisAvailable = health.analysis_available;
       this.canCreate = health.can_create ?? true;
       this.loginUrl = health.login_url ?? '';
+      // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
+      this.api.products().then((r) => {
+        this.products = r.products ?? [];
+        this.amazonTag = r.amazon_tag ?? '';
+        this.renderMenu();
+      }).catch(() => undefined);
     } catch (err) {
       this.showError(`Server nicht erreichbar: ${(err as Error).message}`);
       return;
@@ -592,7 +602,7 @@ export class App {
         } }),
         'Raummaße und Möbelabstände anzeigen'),
       h('div', { class: 'dm-row' },
-        h('button', { class: 'dm-btn primary', onclick: () => this.setTool('measure') }, '📏 Abstand messen'),
+        h('button', { class: 'dm-btn primary', onclick: () => this.setTool('measure') }, 'Abstand messen'),
         this.viewer.measure.manualCount > 0 && h('button', { class: 'dm-btn', onclick: () => {
           this.viewer.measure.clearManual();
           this.renderMenu();
@@ -873,6 +883,146 @@ export class App {
     ];
   }
 
+  // ------------------------------------------------------------------ Produkte und Einkaufsliste
+
+  private shopLink(url: string): string {
+    if (!this.amazonTag || shopOf(url) !== 'amazon') return url;
+    try {
+      const u = new URL(url);
+      if (!u.searchParams.has('tag')) u.searchParams.set('tag', this.amazonTag);
+      return u.toString();
+    } catch {
+      return url;
+    }
+  }
+
+  private productCard(p: Product): HTMLElement {
+    return h('div', { class: 'dm-product' },
+      p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
+      h('div', { class: 'dm-product-text' },
+        h('strong', {}, p.name || 'Produkt'),
+        h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
+      h('a', { class: 'dm-btn small', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener' }, 'Zum Shop'));
+  }
+
+  private productSection(): Child[] {
+    const out: Child[] = [h('h4', { style: 'margin-top:0' }, 'Produkte (IKEA, Amazon …)')];
+    if (this.products.length) {
+      const search = h('input', { class: 'dm-input', type: 'search', placeholder: 'Suchen, z. B. Regal oder IKEA', value: this.productQuery }) as HTMLInputElement;
+      search.addEventListener('input', () => {
+        this.productQuery = search.value;
+        const body = this.elPop.querySelector('.dm-product-list');
+        body?.replaceWith(this.productList());
+      });
+      out.push(search, this.productList());
+    } else {
+      out.push(h('p', { class: 'dm-muted small' }, this.opts.demo
+        ? 'Auf der Webseite erscheinen hier die empfohlenen Produkte. In der Demo kannst du ein Produkt per Link einfügen.'
+        : 'Noch keine empfohlenen Produkte hinterlegt. Du kannst ein Produkt per Link einfügen.'));
+    }
+    out.push(h('div', { class: 'dm-row', style: 'margin-top:8px' },
+      h('button', { class: 'dm-btn small', onclick: () => this.showAddByLink() }, '+ Produkt per Link'),
+      h('button', { class: 'dm-btn small ghost', onclick: () => this.showShoppingList() }, 'Einkaufsliste')));
+    return out;
+  }
+
+  private productList(): HTMLElement {
+    const q = this.productQuery.trim().toLowerCase();
+    const list = this.products.filter((p) => !q || `${p.name} ${SHOP_LABEL[p.source]} ${this.catalog.categories[p.category]?.label}`.toLowerCase().includes(q));
+    return h('div', { class: 'dm-product-list' },
+      list.length ? list.map((p) => h('button', { class: 'dm-product pick', title: 'In den Raum setzen', onclick: () => this.addProduct(p) },
+        p.image ? h('img', { src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('span', { class: 'dm-product-ph' }, SHOP_LABEL[p.source]?.[0] ?? '·'),
+        h('div', { class: 'dm-product-text' },
+          h('strong', {}, p.name),
+          h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.size.map((v) => Math.round(v * 100)).join(' × ') + ' cm', p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · '))),
+        h('span', { class: 'dm-product-add' }, '+')))
+        : h('p', { class: 'dm-muted small' }, 'Nichts gefunden.'));
+  }
+
+  private addProduct(p: ShopProduct): void {
+    this.addObject(p.category, {
+      label: p.name,
+      size: [...p.size] as [number, number, number],
+      color: p.color,
+      product: { source: p.source, name: p.name, url: p.url, sku: '', image: p.image || undefined, price: p.price, catalog_id: p.id },
+    });
+    this.toast(`${p.name} eingefügt`);
+  }
+
+  /** Eigenes Produkt: Link einfügen, Maße selbst eintragen. */
+  private showAddByLink(): void {
+    const url = h('input', { class: 'dm-input', type: 'url', placeholder: 'https://www.ikea.com/de/de/p/…' }) as HTMLInputElement;
+    const name = h('input', { class: 'dm-input', placeholder: 'z. B. Bücherregal weiß' }) as HTMLInputElement;
+    const cats = Object.keys(this.catalog.categories) as Category[];
+    const cat = h('select', { class: 'dm-input' }, cats.map((c) => h('option', { value: c }, this.catalog.categories[c].label))) as HTMLSelectElement;
+    const num = (ph: string) => h('input', { class: 'dm-input', type: 'number', min: 1, max: 1000, step: 1, placeholder: ph }) as HTMLInputElement;
+    const w = num('B'), d = num('T'), hh = num('H');
+    const price = h('input', { class: 'dm-input', type: 'number', min: 0, step: 0.01, placeholder: 'optional' }) as HTMLInputElement;
+    const color = h('input', { type: 'color', class: 'dm-color', value: '#c9b8a0' }) as HTMLInputElement;
+    cat.addEventListener('change', () => {
+      const c = this.catalog.categories[cat.value as Category];
+      w.placeholder = String(Math.round(c.size[0] * 100));
+      d.placeholder = String(Math.round(c.size[1] * 100));
+      hh.placeholder = String(Math.round(c.size[2] * 100));
+      color.value = c.color;
+    });
+    cat.dispatchEvent(new Event('change'));
+    const err = h('p', { class: 'dm-error', hidden: true });
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'Produkt per Link einfügen'),
+      h('p', { class: 'dm-muted' }, 'Kopiere den Link von der Produktseite (IKEA, Amazon oder ein anderer Shop) und trage die Maße aus der Produktbeschreibung ein. Das Teil kommt in echter Größe in den Raum und auf die Einkaufsliste.'),
+      field('Link zum Produkt', url),
+      field('Name', name),
+      field('Art (bestimmt die Form)', cat),
+      h('div', { class: 'dm-row three' }, field('Breite cm', w), field('Tiefe cm', d), field('Höhe cm', hh)),
+      h('div', { class: 'dm-row three' }, field('Preis €', price), field('Farbe', color)),
+      err,
+      h('div', { class: 'dm-row end' },
+        h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
+        h('button', { class: 'dm-btn primary', onclick: () => {
+          const link = url.value.trim();
+          if (!/^https?:\/\//.test(link)) {
+            err.textContent = 'Bitte einen Link beginnend mit https:// einfügen.';
+            err.hidden = false;
+            return;
+          }
+          const c = this.catalog.categories[cat.value as Category];
+          const val = (el: HTMLInputElement, i: number) => (Number(el.value) > 0 ? m(Number(el.value)) : c.size[i]);
+          const label = name.value.trim() || c.label;
+          this.hideOverlay();
+          this.addObject(cat.value as Category, {
+            label, color: color.value,
+            size: [val(w, 0), val(d, 1), val(hh, 2)],
+            product: { source: shopOf(link), name: label, url: link, sku: '', price: price.value ? Number(price.value) : null },
+          });
+        } }, 'Einfügen')),
+    ));
+  }
+
+  /** Alle verlinkten Produkte der Wohnung mit Summe. */
+  private showShoppingList(): void {
+    if (!this.home) return;
+    const rows: { room: string; o: SceneObject }[] = [];
+    this.home.rooms.forEach((r, i) => {
+      for (const o of r.scene.objects) if (o.product?.url) rows.push({ room: r.scene.room.name || `Raum ${i + 1}`, o });
+    });
+    const total = rows.reduce((sum, r) => sum + (r.o.product?.price ?? 0), 0);
+    const missing = rows.filter((r) => r.o.product?.price == null).length;
+    const amazon = rows.some((r) => r.o.product?.source === 'amazon');
+    this.showOverlay(h('div', { class: 'dm-card' },
+      h('h2', {}, 'Einkaufsliste'),
+      rows.length
+        ? h('div', { class: 'dm-shoplist' }, rows.map(({ room, o }) => h('div', {},
+          this.productCard({ ...o.product!, name: o.label || o.product!.name }),
+          h('span', { class: 'dm-muted small dm-shoplist-room' }, room))))
+        : h('p', { class: 'dm-muted' }, 'Noch keine Produkte im Raum. Unter „Möbel“ findest du Produkte oder fügst eines per Link ein.'),
+      rows.length > 0 && h('p', { class: 'dm-shoplist-total' }, h('strong', {}, `Summe: ${euro(total)}`),
+        missing ? h('span', { class: 'dm-muted small' }, ` (ohne ${missing} Produkt${missing > 1 ? 'e' : ''} ohne Preis)`) : ''),
+      rows.length > 0 && h('p', { class: 'dm-muted small' }, 'Preise wie beim Einfügen angegeben, der aktuelle Preis steht im Shop.'),
+      amazon && this.amazonTag && h('p', { class: 'dm-muted small' }, 'Als Amazon-Partner verdienen wir an qualifizierten Verkäufen.'),
+      h('div', { class: 'dm-row end' }, h('button', { class: 'dm-btn primary', onclick: () => this.hideOverlay() }, 'Schließen'))));
+  }
+
   // ------------------------------------------------------------------ Möbel anpassen
 
   private furnitureMenu(): Child[] {
@@ -889,7 +1039,8 @@ export class App {
       chips(cats.filter((c) => this.catalog.categories[c].group === 'deko')),
       h('p', { class: 'dm-muted small' }, 'Bilder, Spiegel und Vorhänge kommen an die ausgewählte Wand, sonst an die Wand gegenüber der Kamera.'),
     ];
-    if (!o) return [h('p', { class: 'dm-muted small' }, 'Tippe ein Möbelstück an, um Maße und Details zu ändern.'), ...add];
+    const shop = this.productSection();
+    if (!o) return [...shop, ...add];
     const update = (mutate: (x: SceneObject) => void, rebuild: boolean) => {
       const next = clone(s);
       mutate(next.objects.find((x) => x.id === o.id)!);
@@ -906,13 +1057,13 @@ export class App {
       h('div', { class: 'dm-row three' },
         field('Drehung', numberInput(Math.round(o.rotation), -360, 720, (v) => update((x) => (x.rotation = ((v % 360) + 360) % 360), true), '°')),
         field('Über Boden', numberInput(cm(o.position[2]), 0, 300, (v) => update((x) => (x.position[2] = m(v)), true), 'cm'))),
+      o.product?.url && this.productCard(o.product),
       field('Produkt-Link (IKEA, Amazon …)', h('input', {
         class: 'dm-input', type: 'url', placeholder: 'https://…', value: o.product?.url ?? '',
         onchange: (e: Event) => update((x) => {
           const url = (e.target as HTMLInputElement).value.trim();
-          const source = url.includes('ikea.') ? 'ikea' : url.includes('amazon.') ? 'amazon' : 'other';
-          x.product = url ? { source, name: x.label, url, sku: '' } : null;
-        }, false),
+          x.product = url ? { ...(x.product ?? {}), source: shopOf(url), name: x.product?.name || x.label, url, sku: x.product?.sku ?? '' } : null;
+        }, false).then(() => this.renderMenu()),
       })),
       h('div', { class: 'dm-row' },
         h('button', { class: 'dm-btn', onclick: () => this.openMenu('color') }, 'Farbe'),
@@ -1027,7 +1178,7 @@ export class App {
         h('button', { class: 'dm-btn small primary', onclick: () => this.setTool('select') }, 'Fertig')));
     }
     if (sel && s) {
-      const btn = (label: string, onclick: () => void, cls = '') => h('button', { class: `dm-btn small ${cls}`, onclick }, label);
+      const btn = (label: string | Node, onclick: () => void, cls = '') => h('button', { class: `dm-btn small ${cls}`, onclick }, label);
       let name = '';
       const items: Child[] = [];
       if (sel.kind === 'object') {
@@ -1038,13 +1189,13 @@ export class App {
             btn('✥', () => this.setGizmo('translate'), this.gizmoMode === 'translate' ? 'primary' : ''),
             btn('⟳', () => this.setGizmo('rotate'), this.gizmoMode === 'rotate' ? 'primary' : ''));
         }
-        items.push(btn('Farbe', () => this.openMenu('color')), btn('Maße', () => this.openMenu('furniture')), btn('🗑', () => this.deleteObject(sel.id), 'danger'));
+        items.push(btn('Farbe', () => this.openMenu('color')), btn('Maße', () => this.openMenu('furniture')), btn(icon(TRASH), () => this.deleteObject(sel.id), 'danger icon'));
       } else if (sel.kind === 'wall') {
         name = `Wand ${wallIndex(s, sel.id) + 1}`;
         items.push(btn('Farbe', () => this.openMenu('color')), btn('Paneele & Fenster', () => this.openMenu('style')));
       } else if (sel.kind === 'panel') {
         name = 'Paneel';
-        items.push(btn('Farbe', () => this.openMenu('color')), btn('Maße', () => this.openMenu('style')), btn('🗑', () => this.removeSelected(), 'danger'));
+        items.push(btn('Farbe', () => this.openMenu('color')), btn('Maße', () => this.openMenu('style')), btn(icon(TRASH), () => this.removeSelected(), 'danger icon'));
       } else {
         name = sel.kind === 'floor' ? 'Boden' : 'Decke';
         items.push(btn('Farbe', () => this.openMenu('color')));
@@ -1167,6 +1318,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style';
 
+const TRASH = '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>';
+
 const MENUS: { id: MenuId; label: string; icon: string }[] = [
   { id: 'view', label: 'Ansicht', icon: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>' },
   { id: 'room', label: 'Raum', icon: '<path d="M4 4h16v16H4z"/><path d="M4 13h7v7M14 4v6h6"/>' },
@@ -1222,3 +1375,15 @@ function rectangleWalls(s: Scene): { length: number; width: number } | null {
   }
   return wallLength(s, 0) >= wallLength(s, 1) ? { length: 0, width: 1 } : { length: 1, width: 0 };
 }
+
+const SHOP_LABEL: Record<string, string> = { ikea: 'IKEA', amazon: 'Amazon', other: 'Shop' };
+
+function shopOf(url: string): Product['source'] {
+  let host = '';
+  try { host = new URL(url).hostname; } catch { /* kein gültiger Link */ }
+  if (/(^|\.)ikea\./.test(host)) return 'ikea';
+  if (/(^|\.)(amazon\.|amzn\.)/.test(host)) return 'amazon';
+  return 'other';
+}
+
+const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });

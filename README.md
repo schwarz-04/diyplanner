@@ -57,6 +57,12 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    führt ein Link zurück zur Webseite. Soll er stattdessen in der normalen Seite stehen:
    `[diy_mamis_raumplaner ansicht="seite"]`, optional mit `hoehe="800px"` und `breite="voll"`.
 
+4. Optional unter *Raumplaner-Produkte* eigene Produktempfehlungen anlegen (Link zu IKEA, Amazon
+   oder einem anderen Shop, Maße, Farbe, Bild-Adresse, Preis, Art des 3D-Modells). Nutzer setzen sie im
+   Raumplaner unter „Möbel“ in echter Größe ein; die Einkaufsliste sammelt alle verlinkten Produkte mit
+   Summe. In den Einstellungen eingetragen, wird der Amazon-Partner-Tag an alle Amazon-Links gehängt.
+   Nutzer können außerdem eigene Produkte per Link einfügen und die Maße selbst eintragen.
+
 Neue Räume können standardmäßig nur angemeldete Nutzer anlegen, weil jede Analyse KI-Guthaben
 kostet (grob 15–30 Cent). Das lässt sich in den Einstellungen abschalten. Bearbeiten kann jeder,
 der den Projekt-Link kennt.

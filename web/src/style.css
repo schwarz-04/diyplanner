@@ -258,3 +258,21 @@ body.dm3d-vollbild { margin: 0; padding: 0; background: #faf8f5; overflow: hidde
 .dm-app .dm-rooms { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .dm-app .dm-rooms .dm-chip { padding: 6px 10px; }
 .dm-app .dm-chip.add { border-style: dashed; color: var(--dm-accent); }
+.dm-app .dm-product {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px; margin-bottom: 6px;
+  border: 1px solid var(--dm-border); border-radius: 10px; background: #fff; text-align: left; color: var(--dm-text); font: inherit;
+}
+.dm-app .dm-product.pick { cursor: pointer; }
+.dm-app .dm-product.pick:hover { border-color: var(--dm-accent); }
+.dm-app .dm-product img, .dm-app .dm-product-ph {
+  width: 48px; height: 48px; flex-shrink: 0; border-radius: 7px; object-fit: contain; background: #f6f3ef;
+  display: flex; align-items: center; justify-content: center; color: var(--dm-muted); font-weight: 600;
+}
+.dm-app .dm-product-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.dm-app .dm-product-text strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.dm-app .dm-product-add { font-size: 20px; color: var(--dm-accent); padding: 0 6px; }
+.dm-app .dm-product-list { margin-top: 8px; max-height: 300px; overflow-y: auto; }
+.dm-app .dm-shoplist { max-height: 50vh; overflow-y: auto; margin-bottom: 8px; }
+.dm-app .dm-shoplist-room { display: block; margin: -4px 0 8px 64px; }
+.dm-app .dm-shoplist-total { font-size: 16px; }
+.dm-app .dm-btn.icon .dm-icon { width: 16px; height: 16px; }

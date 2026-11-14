@@ -1,5 +1,5 @@
 import type { AnalysisInput } from './analysis';
-import type { Catalog, Home, Project, Scene } from './types';
+import type { Catalog, Home, Project, Scene, ShopProduct } from './types';
 
 /**
  * Schnittstelle zum WordPress-Plugin (REST-Namespace dm3d/v1, siehe wordpress-plugin/).
@@ -34,6 +34,10 @@ export class Api {
 
   private json<T>(path: string, method: string, body: unknown): Promise<T> {
     return this.request<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  products() {
+    return this.request<{ products: ShopProduct[]; amazon_tag: string }>('/api/products');
   }
 
   demoScene() {

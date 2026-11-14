@@ -2,7 +2,7 @@
 /**
  * Plugin Name: DIY Mamis Raumplaner
  * Description: 3D-Raumplaner: Aus Video, Fotos oder Grundriss wird per KI ein editierbarer 3D-Raum. Einbinden per Shortcode [diy_mamis_raumplaner].
- * Version: 0.5.0
+ * Version: 0.6.0
  * Requires at least: 6.5
  * Requires PHP: 7.4
  * Text Domain: diy-mamis-3d
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const DM3D_VERSION = '0.5.0';
+const DM3D_VERSION = '0.6.0';
 const DM3D_OPT_KEY = 'dm3d_api_key';
 const DM3D_OPT_MODEL = 'dm3d_model';
 const DM3D_OPT_LOGIN = 'dm3d_login_required';
@@ -21,6 +21,9 @@ define('DM3D_DIR', plugin_dir_path(__FILE__));
 require_once DM3D_DIR . 'includes/store.php';
 require_once DM3D_DIR . 'includes/claude.php';
 require_once DM3D_DIR . 'includes/rest.php';
+require_once DM3D_DIR . 'includes/products.php';
+
+DM3D_Products::init();
 
 add_action('rest_api_init', [DM3D_Rest::class, 'register']);
 
@@ -45,6 +48,13 @@ add_action('admin_init', function () {
         'default' => 'claude-opus-5-5',
         'sanitize_callback' => function ($value) {
             return preg_replace('/[^a-z0-9.\-]/', '', strtolower((string) $value)) ?: 'claude-opus-5-5';
+        },
+    ]);
+    register_setting('dm3d', DM3D_Products::OPT_AMAZON_TAG, [
+        'type' => 'string',
+        'default' => '',
+        'sanitize_callback' => function ($value) {
+            return preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $value);
         },
     ]);
     register_setting('dm3d', DM3D_OPT_LOGIN, [
@@ -91,6 +101,15 @@ function dm3d_settings_page()
                     <td>
                         <input name="<?php echo esc_attr(DM3D_OPT_MODEL); ?>" id="dm3d_model" type="text" class="regular-text"
                                value="<?php echo esc_attr(DM3D_Claude::model()); ?>">
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="dm3d_amazon_tag">Amazon-Partner-Tag</label></th>
+                    <td>
+                        <input name="<?php echo esc_attr(DM3D_Products::OPT_AMAZON_TAG); ?>" id="dm3d_amazon_tag" type="text" class="regular-text"
+                               placeholder="z. B. diymamis-21" value="<?php echo esc_attr(get_option(DM3D_Products::OPT_AMAZON_TAG, '')); ?>">
+                        <p class="description">Wird an alle Amazon-Links im Raumplaner angehängt (Produktliste und von Nutzern eingefügte Links).
+                            Produkte pflegst du unter <a href="<?php echo esc_url(admin_url('edit.php?post_type=' . DM3D_Products::TYPE)); ?>">Raumplaner-Produkte</a>.</p>
                     </td>
                 </tr>
                 <tr>
@@ -153,6 +172,9 @@ add_action('wp_enqueue_scripts', function () {
         return;
     }
     dm3d_enqueue_assets(); // schon im <head>, damit die Seite nicht kurz ungestylt erscheint
+    // Emoji-Skript von WordPress im Vollbild nicht laden (ersetzt Zeichen durch Bilder von s.w.org)
+    remove_action('wp_head', 'print_emoji_detection_script', 7);
+    remove_action('wp_print_styles', 'print_emoji_styles');
     global $wp_styles;
     foreach ((array) $wp_styles->queue as $handle) {
         if (!in_array($handle, ['dm3d-editor', 'admin-bar', 'dashicons'], true)) {
