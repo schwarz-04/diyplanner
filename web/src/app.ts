@@ -2,7 +2,7 @@ import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
-import { TOOL_SETS, findToolProduct, type Tool as DiyTool, type ToolContext, type ToolSet } from './tools';
+import { TOOL_ORDER, TOOL_SETS, findToolProducts, type Tool as DiyTool, type ToolContext, type ToolSet } from './tools';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
 import {
@@ -816,49 +816,51 @@ export class App {
     return 'moebel';
   }
 
-  /** Menü „Werkzeug“: passende Werkzeuge und Anleitung zur Auswahl, sonst fürs ganze Projekt. */
+  /** Menü „Werkzeug“: alle Kategorien, die zur Auswahl oder zum Projekt passenden sind aufgeklappt. */
   private toolsMenu(): Child[] {
     const ctx = this.toolContext();
-    const project = this.projectTools();
-    const out: Child[] = [];
-    if (ctx) {
-      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Passend zur Auswahl:'), this.toolSetView(TOOL_SETS[ctx], true));
-      const rest = project.filter((t) => t !== TOOL_SETS[ctx]);
-      if (rest.length) out.push(h('h4', {}, 'Weitere Arbeiten im Projekt'), ...rest.map((t) => this.toolSetView(t, false)));
-    } else if (project.length) {
-      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Für dein Projekt brauchst du diese Werkzeuge. Wähle ein Möbel, Regal oder eine Wand, um nur die passenden zu sehen.'),
-        ...project.map((t, i) => this.toolSetView(t, i === 0)));
-    } else {
-      out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Noch nichts im Raum, das Werkzeug braucht. Alle Anleitungen:'),
-        ...Object.values(TOOL_SETS).map((t) => this.toolSetView(t, false)));
+    const inProject = new Set(this.projectTools());
+    const out: Child[] = [h('p', { class: 'dm-muted small', style: 'margin-top:0' }, ctx
+      ? `Passend zur Auswahl: ${TOOL_SETS[ctx].title}`
+      : 'Wähle ein Möbel, Regal oder eine Wand, um die passenden Werkzeuge zu sehen.')];
+    for (const c of TOOL_ORDER) {
+      const set = TOOL_SETS[c];
+      out.push(this.toolSetView(set, ctx ? c === ctx : inProject.has(set), c === ctx));
     }
-    // Werkzeuge aus dem Shop, die keiner Arbeit zugeordnet sind
-    const used = new Set(Object.values(TOOL_SETS).flatMap((t) => t.tools).map((t) => findToolProduct(t, this.toolProducts)?.id).filter(Boolean));
-    const more = this.toolProducts.filter((p) => !used.has(p.id));
-    if (more.length) {
-      out.push(h('details', { class: 'dm-toolset' }, h('summary', {}, `Weitere Werkzeuge (${more.length})`),
-        h('div', { class: 'dm-favs-list' }, more.map((p) => this.toolRow({ name: '', match: [p.name.toLowerCase()] })))));
+    // Werkzeuge aus dem Shop, die keiner Kategorie zugeordnet sind
+    const used = new Set(Object.values(TOOL_SETS).flatMap((t) => t.tools).flatMap((t) => findToolProducts(t, this.toolProducts)).map((p) => p.id));
+    const rest = this.toolProducts.filter((p) => !used.has(p.id));
+    if (rest.length) {
+      out.push(h('details', { class: 'dm-toolset' }, h('summary', {}, `Sonstiges (${rest.length})`),
+        h('div', { class: 'dm-favs-list' }, rest.map((p) => this.toolProductRow(p, '')))));
     }
     out.push(h('button', { class: 'dm-btn small', style: 'margin-top:10px', onclick: () => this.printShopList() }, icon(ICON_PDF), ' Einkaufsliste mit Werkzeug und Anleitung als PDF'));
     return out;
   }
 
-  private toolSetView(set: ToolSet, open: boolean): HTMLElement {
-    return h('details', { class: 'dm-toolset', open },
+  private toolSetView(set: ToolSet, open: boolean, current = false): HTMLElement {
+    return h('details', { class: `dm-toolset${current ? ' current' : ''}`, open },
       h('summary', {}, set.title),
-      h('div', { class: 'dm-favs-list' }, set.tools.map((t) => this.toolRow(t))),
+      h('div', { class: 'dm-favs-list' }, set.tools.flatMap((t) => this.toolRows(t))),
       h('details', { class: 'dm-guide' }, h('summary', {}, 'Anleitung'),
         h('ol', {}, set.guide.map((g) => h('li', {}, g)))));
   }
 
-  private toolRow(t: DiyTool): HTMLElement {
-    const p = findToolProduct(t, this.toolProducts);
-    const text = h('span', { class: 'dm-product-text' }, h('strong', {}, p?.name || t.name),
-      h('span', { class: 'dm-muted small' }, [p ? SHOP_LABEL[p.source] : '', p?.price != null ? euro(p.price) : '', !p ? t.note ?? '' : t.name].filter(Boolean).join(' · ')));
-    if (!p) return h('div', { class: 'dm-favrow dm-toolrow' }, h('span', { class: 'dm-favlink' }, h('span', { class: 'dm-product-ph' }, '🔧'), text));
+  /** Ein Werkzeug: alle passenden Shop-Produkte, sonst nur der Name. */
+  private toolRows(t: DiyTool): HTMLElement[] {
+    const list = findToolProducts(t, this.toolProducts);
+    if (list.length) return list.map((p) => this.toolProductRow(p, t.name));
+    if (t.match.some((m) => /blatt/.test(m))) return []; // reines Zubehör ohne Produkt weglassen
+    return [h('div', { class: 'dm-favrow dm-toolrow' }, h('span', { class: 'dm-favlink' }, h('span', { class: 'dm-product-ph' }, '🔧'),
+      h('span', { class: 'dm-product-text' }, h('strong', {}, t.name), t.note ? h('span', { class: 'dm-muted small' }, t.note) : '')))];
+  }
+
+  private toolProductRow(p: ShopProduct, label: string): HTMLElement {
     const key = `tool:${p.id}`;
     return h('div', { class: 'dm-favrow dm-toolrow' },
-      h('a', { class: 'dm-favlink', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' }, productImage(p), text),
+      h('a', { class: 'dm-favlink', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' }, productImage(p),
+        h('span', { class: 'dm-product-text' }, h('strong', {}, p.name),
+          h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.price != null ? euro(p.price) : '', label].filter(Boolean).join(' · ')))),
       h('button', { class: `dm-fav${this.favs.has(key) ? ' active' : ''}`, title: 'Merken', onclick: () => {
         this.toggleFav({ key, name: p.name, url: p.url, image: p.image, source: p.source, price: p.price }); this.renderMenu();
       } }, icon(ICON_HEART)));
@@ -1760,10 +1762,12 @@ export class App {
       ? `<p class="sum">Summe: ${esc(euro(total))}${missing ? ` <span class="m">plus ${missing} ohne Preisangabe</span>` : ''}</p>` : '';
     const tools = kind === 'shop' ? this.projectTools() : [];
     const toolLi = (x: DiyTool) => {
-      const p = findToolProduct(x, this.toolProducts);
-      if (!p) return `<li><strong>${esc(x.name)}</strong>${x.note ? ` <span class="m">· ${esc(x.note)}</span>` : ''}</li>`;
+      const list = findToolProducts(x, this.toolProducts);
+      if (!list.length) return /blatt/.test(x.match.join()) ? '' : `<li><strong>${esc(x.name)}</strong>${x.note ? ` <span class="m">· ${esc(x.note)}</span>` : ''}</li>`;
+      return list.map((p) => {
       const link = this.shopLink(p.url);
       return `<li class="tp">${p.image ? `<img src="${esc(p.image)}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">` : ''}<span><strong>${esc(x.name)}</strong>: ${esc(p.name)}${p.price != null ? ` · ${esc(euro(p.price))}` : ''}<br><a href="${esc(link)}">${esc(link)}</a></span></li>`;
+      }).join('');
     };
     const toolHtml = tools.length ? `<h2>Werkzeug und Anleitung</h2>${tools.map((t) => `<section><h3>${esc(t.title)}</h3><ul>${t.tools.map(toolLi).join('')}</ul>
       <p class="gh">Anleitung</p><ol>${t.guide.map((g) => `<li>${esc(g)}</li>`).join('')}</ol></section>`).join('')}` : '';

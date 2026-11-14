@@ -575,3 +575,4 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-guide { margin-top: 6px; }
 .dm-app .dm-guide > summary { cursor: pointer; color: var(--dm-accent); font-weight: 600; font-size: 12px; }
 .dm-app .dm-guide ol { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.dm-app .dm-toolset.current > summary { color: var(--dm-accent); }

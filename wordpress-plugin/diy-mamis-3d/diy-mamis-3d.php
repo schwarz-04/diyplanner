@@ -2,7 +2,7 @@
 /**
  * Plugin Name: DIY Mamis Raumplaner
  * Description: 3D-Raumplaner: Aus Video, Fotos oder Grundriss wird per KI ein editierbarer 3D-Raum. Einbinden per Shortcode [diy_mamis_raumplaner].
- * Version: 0.12.2
+ * Version: 0.12.3
  * Requires at least: 6.5
  * Requires PHP: 7.4
  * Text Domain: diy-mamis-3d
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const DM3D_VERSION = '0.12.2';
+const DM3D_VERSION = '0.12.3';
 const DM3D_OPT_KEY = 'dm3d_api_key';
 const DM3D_OPT_MODEL = 'dm3d_model';
 const DM3D_OPT_LOGIN = 'dm3d_login_required';
