@@ -832,6 +832,13 @@ export class App {
       out.push(h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Noch nichts im Raum, das Werkzeug braucht. Alle Anleitungen:'),
         ...Object.values(TOOL_SETS).map((t) => this.toolSetView(t, false)));
     }
+    // Werkzeuge aus dem Shop, die keiner Arbeit zugeordnet sind
+    const used = new Set(Object.values(TOOL_SETS).flatMap((t) => t.tools).map((t) => findToolProduct(t, this.toolProducts)?.id).filter(Boolean));
+    const more = this.toolProducts.filter((p) => !used.has(p.id));
+    if (more.length) {
+      out.push(h('details', { class: 'dm-toolset' }, h('summary', {}, `Weitere Werkzeuge (${more.length})`),
+        h('div', { class: 'dm-favs-list' }, more.map((p) => this.toolRow({ name: '', match: [p.name.toLowerCase()] })))));
+    }
     out.push(h('button', { class: 'dm-btn small', style: 'margin-top:10px', onclick: () => this.printShopList() }, icon(ICON_PDF), ' Einkaufsliste mit Werkzeug und Anleitung als PDF'));
     return out;
   }

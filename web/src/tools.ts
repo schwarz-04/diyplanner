@@ -18,15 +18,16 @@ export interface ToolSet { title: string; tools: Tool[]; guide: string[] }
 
 const T = {
   akkuschrauber: { name: 'Akkuschrauber', note: 'mit Bit-Set zum Zusammenbauen', match: ['akkuschrauber', 'akku-schrauber', 'bohrschrauber'] },
+  akku: { name: 'Akku und Ladegerät', note: 'falls die Geräte ohne Akku kommen', match: ['akku-starter', 'starter-set', 'ladegerät'] },
   bits: { name: 'Bit-Set', match: ['bit-set', 'bitset', 'bits'] },
   bohrmaschine: { name: 'Bohrmaschine', note: 'Schlagbohrfunktion für Beton und Mauerwerk', match: ['bohrmaschine', 'schlagbohr', 'bohrhammer'] },
-  bohrer: { name: 'Steinbohrer-Set', match: ['steinbohrer', 'bohrer-set', 'bohrerset'] },
+  bohrer: { name: 'Steinbohrer-Set', match: ['steinbohrer', 'bohrer-set', 'bohrerset', 'bohrer- und bit'] },
   duebel: { name: 'Dübel und Schrauben', note: 'passend zur Wand', match: ['dübel', 'duebel'] },
   leitungssucher: { name: 'Leitungssucher', note: 'vor dem Bohren Strom- und Wasserleitungen prüfen', match: ['leitungssucher', 'ortungsgerät', 'detektor'] },
   wasserwaage: { name: 'Wasserwaage', match: ['wasserwaage', 'kreuzlinienlaser', 'linienlaser'] },
-  zollstock: { name: 'Zollstock oder Maßband', match: ['zollstock', 'maßband', 'massband', 'meterstab'] },
+  zollstock: { name: 'Zollstock oder Maßband', match: ['zollstock', 'maßband', 'massband', 'meterstab', 'entfernungsmesser'] },
   bleistift: { name: 'Bleistift', match: ['bleistift', 'zimmermannsbleistift'] },
-  gummihammer: { name: 'Gummihammer', note: 'für Holzdübel und Steckverbindungen', match: ['gummihammer', 'hammer'] },
+  gummihammer: { name: 'Gummihammer', note: 'für Holzdübel und Steckverbindungen', match: ['gummihammer'] },
   inbus: { name: 'Inbusschlüssel', note: 'liegt bei Möbeln oft bei', match: ['inbus', 'innensechskant', 'sechskant'] },
   spruehgeraet: { name: 'Farbsprühgerät', note: 'oder Farbrolle mit Teleskopstiel', match: ['farbsprüh', 'sprühsystem', 'spruehgeraet', 'farbrolle'] },
   pinsel: { name: 'Pinsel', note: 'für Ecken und Kanten', match: ['pinsel'] },
@@ -34,7 +35,8 @@ const T = {
   malerkrepp: { name: 'Malerkrepp', match: ['malerkrepp', 'kreppband', 'abdeckband'] },
   abdeckfolie: { name: 'Abdeckfolie oder Malervlies', match: ['abdeckfolie', 'malervlies', 'abdeckvlies'] },
   spachtel: { name: 'Spachtel und Füllmasse', note: 'für Löcher in der Wand', match: ['spachtel', 'füllmasse', 'moltofill'] },
-  saege: { name: 'Stichsäge oder Handsäge', note: 'zum Zuschneiden', match: ['stichsäge', 'handsäge', 'säge'] },
+  saege: { name: 'Stichsäge oder Handsäge', note: 'zum Zuschneiden', match: ['stichsäge', 'kreissäge', 'handsäge'] },
+  schleifer: { name: 'Exzenterschleifer', note: 'Schnittkanten und alte Lackschichten anschleifen', match: ['exzenterschleifer', 'schleifer'] },
   montagekleber: { name: 'Montagekleber', match: ['montagekleber', 'kleber'] },
   cutter: { name: 'Cuttermesser', match: ['cuttermesser', 'cutter', 'teppichmesser'] },
 } satisfies Record<string, Tool>;
@@ -42,7 +44,7 @@ const T = {
 export const TOOL_SETS: Record<ToolContext, ToolSet> = {
   moebel: {
     title: 'Möbel aufbauen',
-    tools: [T.akkuschrauber, T.bits, T.inbus, T.gummihammer, T.zollstock, T.wasserwaage],
+    tools: [T.akkuschrauber, T.akku, T.bits, T.inbus, T.gummihammer, T.zollstock, T.wasserwaage],
     guide: [
       'Teile auspacken und mit der Teileliste der Anleitung abgleichen. Schrauben nach Größe sortieren.',
       'Auf einer weichen Unterlage arbeiten (Karton oder Decke), damit nichts verkratzt.',
@@ -53,7 +55,7 @@ export const TOOL_SETS: Record<ToolContext, ToolSet> = {
   },
   regal: {
     title: 'Regal aufbauen und befestigen',
-    tools: [T.akkuschrauber, T.bohrmaschine, T.bohrer, T.duebel, T.leitungssucher, T.wasserwaage, T.zollstock, T.bleistift],
+    tools: [T.akkuschrauber, T.akku, T.bohrmaschine, T.bohrer, T.duebel, T.leitungssucher, T.wasserwaage, T.zollstock, T.bleistift],
     guide: [
       'Regal nach Anleitung zusammenbauen.',
       'Gewünschte Höhe messen und die Bohrlöcher mit Wasserwaage und Bleistift anzeichnen.',
@@ -87,7 +89,7 @@ export const TOOL_SETS: Record<ToolContext, ToolSet> = {
   },
   paneel: {
     title: 'Paneele anbringen',
-    tools: [T.saege, T.montagekleber, T.cutter, T.zollstock, T.wasserwaage, T.bleistift],
+    tools: [T.saege, T.schleifer, T.montagekleber, T.cutter, T.zollstock, T.wasserwaage, T.bleistift],
     guide: [
       'Wand säubern, sie muss trocken, glatt und tragfähig sein.',
       'Paneele ausmessen und anzeichnen, dann zuschneiden.',
@@ -98,10 +100,11 @@ export const TOOL_SETS: Record<ToolContext, ToolSet> = {
   },
 };
 
-/** Passendes Produkt aus der Produktliste zum Werkzeug. */
+/** Passendes Produkt aus der Produktliste zum Werkzeug (Zubehör wie Sägeblätter nur, wenn nichts anderes passt). */
 export function findToolProduct<P extends { name: string }>(t: Tool, products: P[]): P | undefined {
   for (const m of t.match) {
-    const p = products.find((x) => x.name.toLowerCase().includes(m));
+    const hits = products.filter((x) => x.name.toLowerCase().includes(m));
+    const p = hits.find((x) => !/blatt|blätter|zubehör/i.test(x.name)) ?? hits[0];
     if (p) return p;
   }
   return undefined;
