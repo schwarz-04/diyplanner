@@ -432,3 +432,52 @@ export function attach(a: SceneObject, b: SceneObject): boolean {
   if (a.position[2] < 0) a.position[2] = 0;
   return true;
 }
+
+// ------------------------------------------------------------------ Kollision und freie Plätze
+
+const EPS = 0.0015;
+
+function intersects(A: Box, B: Box): boolean {
+  for (let k = 0; k < 3; k++) if (A.min[k] >= B.max[k] - EPS || A.max[k] <= B.min[k] + EPS) return false;
+  return true;
+}
+
+/** Alle Paare von Teilen, die ineinander ragen (nicht nur berühren). */
+export function collisions(objects: SceneObject[]): [SceneObject, SceneObject][] {
+  const boxes = objects.map(partBox);
+  const out: [SceneObject, SceneObject][] = [];
+  for (let i = 0; i < objects.length; i++) for (let j = i + 1; j < objects.length; j++) {
+    if (intersects(boxes[i], boxes[j])) out.push([objects[i], objects[j]]);
+  }
+  return out;
+}
+
+/** Freier Platz auf dem Boden der Werkbank für ein neues Teil: rechts neben den anderen, sonst dahinter. */
+export function freeSpot(objects: SceneObject[], size: [number, number, number], rotation = 0): [number, number, number] {
+  const probe: SceneObject = { id: '_probe', category: 'box', label: '', position: [BENCH / 2, BENCH / 2, 0], rotation, size, color: '', product: null };
+  const pb = partBox(probe);
+  const hx = (pb.max[0] - pb.min[0]) / 2, hy = (pb.max[1] - pb.min[1]) / 2;
+  const free = (x: number, y: number) => {
+    probe.position = [x, y, 0];
+    const A = partBox(probe);
+    return objects.every((o) => !intersects(A, partBox(o)));
+  };
+  const b = bounds(objects);
+  if (!b) return [BENCH / 2, BENCH / 2, 0];
+  const gap = 0.08;
+  const cy = (b.min[1] + b.max[1]) / 2;
+  const tries: [number, number][] = [
+    [b.max[0] + gap + hx, cy],
+    [b.min[0] - gap - hx, cy],
+    [(b.min[0] + b.max[0]) / 2, b.min[1] - gap - hy],
+    [(b.min[0] + b.max[0]) / 2, b.max[1] + gap + hy],
+  ];
+  // nicht zu weit vom Rest weg: erst die naheliegenden Plätze innerhalb der Werkbank
+  for (const [x, y] of tries) {
+    if (x - hx >= 0 && x + hx <= BENCH && y - hy >= 0 && y + hy <= BENCH && free(x, y)) return [x, y, 0];
+  }
+  for (let y = hy + 0.05; y <= BENCH * 2; y += 0.1) {
+    for (let x = hx + 0.05; x <= BENCH * 2; x += 0.1) if (free(x, y)) return [x, y, 0];
+  }
+  return [b.max[0] + gap + hx, cy, 0];
+}

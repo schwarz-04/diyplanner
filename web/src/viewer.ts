@@ -168,6 +168,7 @@ export class Viewer {
   setHome(home: Home, active: number, keepCamera: boolean): void {
     const prevSel = active === this.active ? this.selection : null;
     const placingId = this.placing?.id;
+    this.previewCut(null);
     this.stopPlacing();
     this.gizmo.detach();
     this.measure.detach();
@@ -310,7 +311,10 @@ export class Viewer {
         const size = this.sceneData?.objects.find((o) => o.id === sel.id)?.size;
         const top = Math.max(0, (this.sceneData?.room.height ?? 2.5) - (size?.[2] ?? 0));
         node.position.y = THREE.MathUtils.clamp(node.position.y, 0, top);
-        if (this.sceneData?.diy) this.snapToParts(node, sel.id);
+        if (this.sceneData?.diy) {
+          this.snapToParts(node, sel.id);
+          this.blockCollision(node, sel.id);
+        }
         const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
         this.events.onObjectMoving?.(sel.id, threeToPlan(node.position), rot);
       }
@@ -318,6 +322,95 @@ export class Viewer {
     this.selectionBox?.update();
     this.measure.updateSelection();
     this.updateHandles();
+  }
+
+  /** Werkbank: Teile dürfen nicht ineinander geschoben werden. Bei Kollision zurück auf die letzte gültige Lage. */
+  private blockCollision(node: THREE.Object3D, id: string): void {
+    node.updateWorldMatrix(true, false);
+    const a = new THREE.Box3().setFromObject(node).expandByScalar(-0.0015);
+    let hit = false;
+    for (const [otherId, other] of this.nodes) {
+      if (otherId === id || findData(other)?.dm_type !== 'object') continue;
+      if (a.intersectsBox(new THREE.Box3().setFromObject(other).expandByScalar(-0.0015))) { hit = true; break; }
+    }
+    const valid = node.userData.dm_valid as { p: THREE.Vector3; r: number } | undefined;
+    if (hit && valid) {
+      node.position.copy(valid.p);
+      node.rotation.y = valid.r;
+      node.updateWorldMatrix(true, false);
+    } else if (!hit) {
+      node.userData.dm_valid = { p: node.position.clone(), r: node.rotation.y };
+    }
+  }
+
+  // ------------------------------------------------------------------ Zuschnitt-Vorschau
+
+  private cutPreview: { node: THREE.Object3D; group: THREE.Group; mats: { m: THREE.Material; t: boolean; o: number; dw: boolean }[] } | null = null;
+
+  /** Schnitt zeigen: Linie an der Schnittstelle, wegfallender Teil halbtransparent. keep = Länge, die bleibt (m), null = aus. */
+  previewCut(id: string | null, axis: 0 | 1 | 2 = 0, keep: number | null = null): void {
+    const prev = this.cutPreview;
+    if (prev) {
+      prev.node.remove(prev.group);
+      disposeTree(prev.group);
+      for (const x of prev.mats) { x.m.transparent = x.t; x.m.opacity = x.o; x.m.depthWrite = x.dw; x.m.needsUpdate = true; }
+      this.cutPreview = null;
+      this.setOverlaysVisible(true);
+    }
+    if (!id || keep === null) return;
+    const node = this.nodes.get(id) as THREE.Mesh | undefined;
+    const o = this.sceneData?.objects.find((x) => x.id === id);
+    if (!node || !o) return;
+    const [w, d, h] = o.size;
+    const full = o.size[axis];
+    if (!(keep > 0 && keep < full)) return;
+    // Lokale Maße im three-System: x = Breite, y = Höhe, z = -Tiefe; behalten wird das vordere Ende (wie cutTo)
+    const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) => {
+      const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
+      g.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      return g;
+    };
+    let kept: THREE.BufferGeometry, plane: THREE.BufferGeometry;
+    const e = 0.004;
+    if (axis === 0) {
+      kept = box(-w / 2, -w / 2 + keep, 0, h, -d / 2, d / 2);
+      plane = box(-w / 2 + keep - 0.0005, -w / 2 + keep + 0.0005, -e, h + e, -d / 2 - e, d / 2 + e);
+    } else if (axis === 1) {
+      kept = box(-w / 2, w / 2, 0, h, d / 2 - keep, d / 2);
+      plane = box(-w / 2 - e, w / 2 + e, -e, h + e, d / 2 - keep - 0.0005, d / 2 - keep + 0.0005);
+    } else {
+      kept = box(-w / 2, w / 2, 0, keep, -d / 2, d / 2);
+      plane = box(-w / 2 - e, w / 2 + e, keep - 0.0005, keep + 0.0005, -d / 2 - e, d / 2 + e);
+    }
+    const group = new THREE.Group();
+    group.name = 'cut_preview';
+    group.add(new THREE.Mesh(kept, new THREE.MeshStandardMaterial({ color: o.color, roughness: 0.75 })));
+    const accent = new THREE.Color('#c2537a');
+    const line = new THREE.LineSegments(new THREE.EdgesGeometry(plane), new THREE.LineBasicMaterial({ color: accent, depthTest: false }));
+    line.renderOrder = 10;
+    const sheet = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.35, depthTest: false, side: THREE.DoubleSide }));
+    sheet.renderOrder = 9;
+    group.add(line, sheet);
+    const mats = (Array.isArray(node.material) ? node.material : [node.material]).map((m) => {
+      const saved = { m, t: m.transparent, o: m.opacity, dw: m.depthWrite };
+      m.transparent = true;
+      m.opacity = 0.22;
+      m.depthWrite = false;
+      m.needsUpdate = true;
+      return saved;
+    });
+    node.add(group);
+    this.cutPreview = { node, group, mats };
+    // Auswahlrahmen, Griffe und Pfeile verdecken sonst die Schnittlinie
+    this.setOverlaysVisible(false);
+  }
+
+  private setOverlaysVisible(v: boolean): void {
+    if (this.selectionBox) this.selectionBox.visible = v;
+    if (this.handles) this.handles.group.visible = v;
+    (this.gizmo as unknown as THREE.Object3D).visible = v;
+    const helper = (this.gizmo as unknown as { getHelper?: () => THREE.Object3D }).getHelper?.();
+    if (helper) helper.visible = v;
   }
 
   /** Werkbank: Flächen des bewegten Teils rasten an den Flächen der anderen Teile ein. */
@@ -576,6 +669,25 @@ export class Viewer {
     const center = new THREE.Vector2((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
     const size = new THREE.Vector2(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
     const h = this.sceneData.room.height;
+    if (this.sceneData.diy && this.mode !== 'top') {
+      // Werkbank: Blick fast waagerecht auf die Teile (wie auf einer Werkbank), nicht von oben
+      const objs = this.sceneData.objects;
+      const box = new THREE.Box3();
+      for (const o of objs) {
+        const n = this.nodes.get(o.id);
+        if (n) box.expandByObject(n);
+      }
+      if (box.isEmpty()) box.set(planToThree(center.x - 0.6, center.y + 0.4, 0), planToThree(center.x + 0.6, center.y - 0.4, 0.8));
+      const c = box.getCenter(new THREE.Vector3());
+      const r = Math.max(0.6, box.getSize(new THREE.Vector3()).length() / 2);
+      this.controls.target.set(c.x, Math.max(0.15, c.y), c.z);
+      const d = (r * 2.4 + 0.6) * Math.max(1, 0.85 / this.camera.aspect);
+      // ca. 18° über der Waagerechten, leicht von vorne rechts
+      const el = THREE.MathUtils.degToRad(18), az = THREE.MathUtils.degToRad(28);
+      this.camera.position.set(c.x + d * Math.cos(el) * Math.sin(az), Math.max(0.15, c.y) + d * Math.sin(el), c.z + d * Math.cos(el) * Math.cos(az));
+      this.controls.update();
+      return;
+    }
     this.controls.target.copy(planToThree(center.x, center.y, h * 0.35));
     if (this.mode === 'top') {
       this.camera.position.copy(planToThree(center.x, center.y - 0.01, Math.max(size.x, size.y) * 1.6 + h));

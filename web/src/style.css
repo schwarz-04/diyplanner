@@ -639,3 +639,5 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
   .dm-app:not(.dm-wide) .dm-bench { bottom: 84px; }
   .dm-app .dm-benchbtn { min-width: 54px; }
 }
+.dm-app .dm-benchpanel.cut { align-items: flex-end; }
+.dm-app .dm-benchpanel.cut .dm-cutinfo { flex-basis: 100%; text-align: center; }
