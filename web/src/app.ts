@@ -2,7 +2,7 @@ import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
-import { PART_DEFAULTS, attach, collisions, composeObject, freeSpot, isBauteil, cutTo, jointKey, materials, newBuild, splitAt, tip, withCasters, type Joint, type Materials } from './diy';
+import { PART_DEFAULTS, attach, collisions, composeObject, connected, freeSpot, isBauteil, cutTo, jointKey, materials, newBuild, splitAt, tip, withCasters, type Joint, type Materials } from './diy';
 import { TOOL_ORDER, TOOL_SETS, findToolProducts, type Tool as DiyTool, type ToolContext, type ToolSet } from './tools';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
@@ -93,6 +93,10 @@ export class App {
   private products: ShopProduct[] = [];
   /** Werkzeuge aus der Produktliste (Kategorie Werkzeug) */
   private toolProducts: ShopProduct[] = [];
+  /** Verbindungen aus der Produkttabelle (Schrauben, Winkel, Scharniere …) */
+  private connProducts: ShopProduct[] = [];
+  /** Gewählte Filter und Variante je Unterkategorie im Menü „Verbindungen“ */
+  private connPick: Record<string, { kind?: string; length?: string; diameter?: string; id?: string }> = {};
   private amazonTag = '';
   private productQuery = '';
   private furnTab: FurnTab | null = null;
@@ -182,6 +186,7 @@ export class App {
       onObjectMoving: (id, pos, rot) => this.plan.updateObject(id, pos[0], pos[1], rot),
       onWalk: (x, y, yaw) => this.plan.setViewer(x, y, yaw),
       onObjectMoved: (id, pos, rot) => this.objectMoved(id, pos, rot),
+      onGroupMoved: (moves) => this.groupMoved(moves),
       onMeasured: () => this.renderMenu(),
       onRoomPick: (i) => this.switchRoom(i),
     });
@@ -195,6 +200,7 @@ export class App {
       this.viewer.moveNode(o.id, pos);
       this.objectMoved(o.id, pos, o.rotation);
     };
+    this.viewer.measure.onEditSize = (axis, meters) => this.benchEdit((x) => { x.size[axis] = Math.round(meters * 10000) / 10000; });
     this.viewer.measure.onEditElevation = (meters) => {
       const sel = this.selection;
       const o = sel?.kind === 'object' ? this.scene?.objects.find((v) => v.id === sel.id) : undefined;
@@ -236,8 +242,9 @@ export class App {
       // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
       this.api.products().then((r) => {
         const all = r.products ?? [];
-        this.products = all.filter((p) => p.group !== 'werkzeug');
+        this.products = all.filter((p) => p.group !== 'werkzeug' && p.group !== 'verbindung');
         this.toolProducts = all.filter((p) => p.group === 'werkzeug');
+        this.connProducts = all.filter((p) => p.group === 'verbindung');
         this.amazonTag = r.amazon_tag ?? '';
         this.renderMenu();
       }).catch(() => undefined);
@@ -612,12 +619,12 @@ export class App {
    * rebuild = true: die 3D-Szene wird neu aufgebaut (neue Möbel, Maße, Paneele).
    * rebuild = false: der Editor hat die Änderung schon selbst angezeigt, es wird nur gespeichert.
    */
-  private async apply(next: Scene, rebuild: boolean): Promise<void> {
+  private async apply(next: Scene, rebuild: boolean, together?: Set<string>): Promise<void> {
     if (!this.home) return;
-    // Werkbank: Teile dürfen nicht ineinander ragen
+    // Werkbank: Teile dürfen nicht ineinander ragen (verschraubte Teile untereinander schon, z. B. schräg gedreht)
     if (next.diy && this.scene?.diy) {
       const before = new Set(collisions(this.scene.objects).map(([a, b]) => `${a.id}|${b.id}`));
-      const bad = collisions(next.objects).find(([a, b]) => !before.has(`${a.id}|${b.id}`));
+      const bad = collisions(next.objects).find(([a, b]) => !before.has(`${a.id}|${b.id}`) && !(together?.has(a.id) && together.has(b.id)));
       if (bad) {
         this.toast(`Geht nicht: „${bad[0].label || 'Teil'}“ würde in „${bad[1].label || 'Teil'}“ hineinragen.`);
         this.renderPanel();
@@ -711,6 +718,19 @@ export class App {
     o.position = pos.map((v) => Math.round(v * 1000) / 1000) as [number, number, number];
     o.rotation = rot;
     this.apply(next, false);
+    this.renderPanel();
+  }
+
+  /** Werkbank: verschraubte Teile gemeinsam an die neue Stelle übernehmen. */
+  private groupMoved(moves: { id: string; position: [number, number, number]; rotation: number }[]): void {
+    const next = clone(this.scene!);
+    for (const m of moves) {
+      const o = next.objects.find((x) => x.id === m.id);
+      if (!o) continue;
+      o.position = m.position.map((v) => Math.round(v * 1000) / 1000) as [number, number, number];
+      o.rotation = m.rotation;
+    }
+    this.apply(next, false, new Set(moves.map((m) => m.id)));
     this.renderPanel();
   }
 
@@ -1113,7 +1133,9 @@ export class App {
       out.push(this.benchPanelView(o));
     } else if (o) {
       const c = (v: number) => String(cm(v)).replace('.', ',');
-      out.push(h('div', { class: 'dm-benchpanel info' }, h('strong', {}, o.label || 'Teil'), ` · ${c(o.size[0])} × ${c(o.size[1])} × ${c(o.size[2])} cm`));
+      const linked = connected(s.objects, s.diyOff, o.id).length - 1;
+      out.push(h('div', { class: 'dm-benchpanel info' }, h('strong', {}, o.label || 'Teil'), ` · ${c(o.size[0])} × ${c(o.size[1])} × ${c(o.size[2])} cm`,
+        linked ? h('span', { class: 'dm-muted small' }, ` · fest verschraubt mit ${linked} ${linked === 1 ? 'Teil' : 'Teilen'}, bewegt sich gemeinsam (Lösen im Bauplan)`) : ''));
     } else if (!s.objects.length) {
       out.push(h('div', { class: 'dm-benchpanel info' }, 'Leere Werkbank. Mit „Teil“ fügst du Möbel, Holzplatten, Leisten oder Rollen hinzu.'));
     }
@@ -1175,7 +1197,7 @@ export class App {
       colorInput(o.color, (hex) => this.benchEdit((x) => { x.color = hex; })));
   }
 
-  private materialView(mat: Materials): Child[] {
+  private materialView(mat: Materials, scene?: Scene): Child[] {
     const rows = (list: { label: string; size?: string; count: number }[]) => h('ul', { class: 'dm-matlist' },
       list.map((r) => h('li', {}, h('strong', {}, `${r.count} × ${r.label}`), r.size ? h('span', { class: 'dm-muted small' }, ` · ${r.size}`) : '')));
     const out: Child[] = [];
@@ -1183,8 +1205,24 @@ export class App {
     if (mat.furniture.length) out.push(h('h4', {}, 'Möbel'), rows(mat.furniture));
     if (mat.hardware.length) out.push(h('h4', {}, 'Kleinteile'), rows(mat.hardware));
     if (mat.screws.length) {
-      out.push(h('h4', {}, 'Schrauben'), h('ul', { class: 'dm-matlist' }, mat.screws.map((r) =>
-        h('li', {}, h('strong', {}, `${r.count} × ${r.label}`), h('span', { class: 'dm-muted small' }, ` · vorbohren ${String(r.pilot).replace('.', ',')} mm`)))));
+      out.push(h('h4', {}, 'Schrauben'), h('ul', { class: 'dm-matlist' }, mat.screws.map((r) => {
+        const p = this.screwProduct(r.dia, r.len);
+        return h('li', {}, h('strong', {}, `${r.count} × ${r.label}`), h('span', { class: 'dm-muted small' }, ` · vorbohren ${String(r.pilot).replace('.', ',')} mm`),
+          p ? h('a', { class: 'dm-matlink', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener' }, `Passend: ${p.name}${p.conn?.pack ? ` (${p.conn.pack})` : ''}`) : '');
+      })));
+    }
+    const hw = scene?.diyHardware ?? [];
+    if (hw.length) {
+      const edit = !!scene && scene === this.scene && this.inDiy;
+      out.push(h('h4', {}, 'Verbindungen und Beschläge'), h('ul', { class: 'dm-matlist' }, hw.map((r) => {
+        const shop = this.connProducts.find((p) => p.id === r.product.catalog_id);
+        return h('li', { class: 'dm-hwrow' },
+          h('span', {}, h('strong', {}, `${r.count} × `), h('a', { class: 'dm-matlink inline', href: this.shopLink(r.product.url), target: '_blank', rel: 'sponsored noopener' }, r.product.name),
+            r.sub ? h('span', { class: 'dm-muted small' }, ` · ${r.sub}`) : ''),
+          edit && shop ? h('span', { class: 'dm-stepper' },
+            h('button', { class: 'dm-btn small ghost', title: 'Eins weniger', onclick: () => this.addHardware(shop, -1) }, '−'),
+            h('button', { class: 'dm-btn small ghost', title: 'Eins mehr', onclick: () => this.addHardware(shop, 1) }, '+')) : '');
+      })));
     }
     return out;
   }
@@ -1194,30 +1232,157 @@ export class App {
     return `${name(j.through)} an ${name(j.into)}`;
   }
 
-  /** Menü „Bauteile“ (nur Werkbank): Platten, Leisten, Rollen, Füße. */
+  /** Eingaben im Menü „Bauteile“ (cm), bleiben beim Neuzeichnen erhalten. */
+  private partForm = {
+    board: { lage: 'liegend', l: 80, b: 40, s: 1.8 },
+    batten: { lage: 'liegend', l: 100, b: 4, s: 2 },
+    caster: { d: 5, h: 7 },
+    foot: { d: 4, h: 10 },
+  };
+
+  /** Menü „Bauteile“ (nur Werkbank): Maße eingeben, dann einfügen. */
   private partsMenu(): Child[] {
-    const out: Child[] = [];
-      const part = (c: Category, label: string, size?: [number, number, number]) =>
-        h('button', { class: 'dm-chip', onclick: () => this.placeNew(c, { label: this.catalog.categories[c].label, size }) }, '+ ', label);
-      out.push(
-        h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Tippe ein Bauteil an, es kommt neben die anderen Teile auf die Werkbank. Maße und Zuschnitt stellst du danach in der Leiste unten ein. Fertige Möbel wie BILLY oder KALLAX findest du unter „Möbel“.'),
-        h('h4', {}, 'Holzplatten (18 mm)'),
+    const f = this.partForm;
+    const num = (obj: Record<string, number | string>, key: string, label: string, min = 0.1, max = 400) => {
+      const input = h('input', { class: 'dm-input', type: 'number', step: 0.1, min, max, value: String(obj[key]) }) as HTMLInputElement;
+      input.addEventListener('input', () => { const v = Number(input.value); if (Number.isFinite(v) && v >= min && v <= max) obj[key] = v; });
+      return field(label, h('span', { class: 'dm-unit' }, input, h('small', {}, 'cm')));
+    };
+    const lage = (obj: { lage: string }, opts: [string, string][]) => {
+      const sel = h('select', { class: 'dm-input' }, opts.map(([v, l]) => h('option', { value: v, selected: obj.lage === v }, l))) as HTMLSelectElement;
+      sel.addEventListener('change', () => { obj.lage = sel.value; });
+      return field('Lage', sel);
+    };
+    const preset = (label: string, apply: () => void) => h('button', { class: 'dm-chip', onclick: () => { apply(); this.renderMenu(); } }, label);
+    const insert = (label: string, run: () => void) => h('button', { class: 'dm-btn primary small', style: 'margin-top:6px', onclick: run }, '+ ', label);
+    const M = (v: number) => Math.round(v * 10) / 1000; // cm -> m (auf mm)
+    // Länge × Breite × Stärke -> Breite, Tiefe, Höhe auf der Werkbank
+    const orient = (lg: string, l: number, b: number, t: number): [number, number, number] =>
+      lg === 'stehend' ? [M(l), M(t), M(b)] : lg === 'seite' ? [M(t), M(b), M(l)] : lg === 'senkrecht' ? [M(b), M(t), M(l)] : [M(l), M(b), M(t)];
+    const label = (c: Category) => this.catalog.categories[c]?.label ?? PART_DEFAULTS[c]?.label ?? 'Teil';
+    return [
+      h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Maße eingeben und einfügen: das Teil kommt neben die anderen auf die Werkbank. Ändern kannst du es danach jederzeit über die Maßpfeile oder „Maße“. Fertige Möbel wie BILLY oder KALLAX findest du unter „Möbel“, Schrauben und Beschläge unter „Verbindungen“.'),
+      h('details', { class: 'dm-toolset dm-partform', open: true }, h('summary', {}, 'Holzplatte'),
         h('div', { class: 'dm-grid' },
-          part('board', 'Platte liegend', [0.8, 0.4, 0.018]),
-          part('board', 'Platte stehend', [0.8, 0.018, 0.6]),
-          part('board', 'Seitenwand', [0.018, 0.4, 0.6]),
-          part('board', 'Rückwand 5 mm', [0.8, 0.005, 0.6])),
-        h('h4', {}, 'Leisten'),
+          preset('Regalboden 80 × 30', () => Object.assign(f.board, { lage: 'liegend', l: 80, b: 30, s: 1.8 })),
+          preset('Seitenwand 60 × 40', () => Object.assign(f.board, { lage: 'seite', l: 60, b: 40, s: 1.8 })),
+          preset('Front 80 × 60', () => Object.assign(f.board, { lage: 'stehend', l: 80, b: 60, s: 1.8 })),
+          preset('Rückwand 5 mm', () => Object.assign(f.board, { lage: 'stehend', l: 80, b: 60, s: 0.5 }))),
+        lage(f.board, [['liegend', 'liegend (Boden, Deckel)'], ['stehend', 'stehend (Front, Rückwand)'], ['seite', 'Seitenwand']]),
+        h('div', { class: 'dm-row3' }, num(f.board, 'l', 'Länge'), num(f.board, 'b', 'Breite'), num(f.board, 's', 'Stärke', 0.1, 10)),
+        insert('Platte einfügen', () => this.placeNew('board', { label: label('board'), size: orient(f.board.lage, f.board.l, f.board.b, f.board.s) }))),
+      h('details', { class: 'dm-toolset dm-partform', open: true }, h('summary', {}, 'Leiste / Kantholz'),
         h('div', { class: 'dm-grid' },
-          part('batten', 'Leiste liegend', [1, 0.04, 0.02]),
-          part('batten', 'Leiste stehend', [0.04, 0.02, 1]),
-          part('batten', 'Kantholz 4 × 4', [1, 0.04, 0.04])),
-        h('h4', {}, 'Rollen und Füße'),
+          preset('Leiste 4 × 2', () => Object.assign(f.batten, { b: 4, s: 2 })),
+          preset('Kantholz 4 × 4', () => Object.assign(f.batten, { b: 4, s: 4 })),
+          preset('Kantholz 6 × 6', () => Object.assign(f.batten, { b: 6, s: 6 }))),
+        lage(f.batten, [['liegend', 'liegend'], ['senkrecht', 'senkrecht (Bein, Pfosten)']]),
+        h('div', { class: 'dm-row3' }, num(f.batten, 'l', 'Länge'), num(f.batten, 'b', 'Breite', 0.1, 40), num(f.batten, 's', 'Stärke', 0.1, 40)),
+        insert('Leiste einfügen', () => this.placeNew('batten', { label: label('batten'), size: orient(f.batten.lage, f.batten.l, f.batten.b, f.batten.s) }))),
+      h('details', { class: 'dm-toolset dm-partform' }, h('summary', {}, 'Möbelrolle'),
         h('div', { class: 'dm-grid' },
-          part('caster', 'Möbelrolle 50 mm', [0.05, 0.05, 0.07]),
-          part('caster', 'Möbelrolle 75 mm', [0.075, 0.075, 0.1]),
-          part('foot', 'Möbelfuß 10 cm', [0.04, 0.04, 0.1])));
-    return out;
+          preset('50 mm', () => Object.assign(f.caster, { d: 5, h: 7 })),
+          preset('75 mm', () => Object.assign(f.caster, { d: 7.5, h: 10 }))),
+        h('div', { class: 'dm-row3' }, num(f.caster, 'd', 'Rad Ø', 1, 20), num(f.caster, 'h', 'Höhe', 1, 30)),
+        insert('Rolle einfügen', () => this.placeNew('caster', { label: label('caster'), size: [M(f.caster.d), M(f.caster.d), M(f.caster.h)] }))),
+      h('details', { class: 'dm-toolset dm-partform' }, h('summary', {}, 'Möbelfuß'),
+        h('div', { class: 'dm-row3' }, num(f.foot, 'd', 'Ø', 1, 20), num(f.foot, 'h', 'Höhe', 1, 80)),
+        insert('Fuß einfügen', () => this.placeNew('foot', { label: label('foot'), size: [M(f.foot.d), M(f.foot.d), M(f.foot.h)] }))),
+    ];
+  }
+
+  // ------------------------------------------------------------------ Verbindungen
+
+  /** Menü „Verbindungen“: Schrauben, Nägel, Winkel, Scharniere, Griffe … mit Auswahl der Variante. */
+  private connMenu(): Child[] {
+    const list = this.connProducts;
+    if (!list.length) {
+      return [h('p', { class: 'dm-muted small', style: 'margin-top:0' }, 'Hier erscheinen Schrauben, Nägel, Winkel, Scharniere und Griffe aus dem Shop, sobald die Tabelle „Verbindungen“ in WordPress importiert ist.')];
+    }
+    const subs = new Map<string, ShopProduct[]>();
+    for (const p of list) {
+      const sub = p.conn?.sub || 'Sonstiges';
+      subs.set(sub, [...(subs.get(sub) ?? []), p]);
+    }
+    const order = CONN_ORDER;
+    const sorted = [...subs.keys()].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99) || a.localeCompare(b));
+    return [
+      h('p', { class: 'dm-muted small', style: 'margin-top:0' }, this.inDiy
+        ? 'Wähle Art, Länge und Durchmesser. Mit „Zum Bauplan“ kommt die Verbindung auf die Materialliste. Schrauben für aneinanderliegende Teile setzt das Programm selbst, passende Produkte stehen dann in der Materialliste.'
+        : 'Wähle Art, Länge und Durchmesser und öffne das passende Produkt im Shop.'),
+      ...sorted.map((sub, i) => this.connSection(sub, subs.get(sub)!, i < 2)),
+    ];
+  }
+
+  private connSection(sub: string, items: ShopProduct[], open: boolean): HTMLElement {
+    const pick = (this.connPick[sub] ??= {});
+    const keys = [['kind', 'Art'], ['length', 'Länge'], ['diameter', 'Durchmesser']] as const;
+    const matches = (p: ShopProduct, skip?: string) => keys.every(([k]) => k === skip || !pick[k] || (p.conn?.[k] ?? '') === pick[k]);
+    const filters: HTMLElement[] = [];
+    for (const [k, label] of keys) {
+      // Werte, die zu den anderen gewählten Filtern passen
+      const values = [...new Set(items.filter((p) => matches(p, k)).map((p) => p.conn?.[k] ?? '').filter(Boolean))].sort(naturalSort);
+      const all = new Set(items.map((p) => p.conn?.[k] ?? '').filter(Boolean));
+      if (all.size < 2) continue;
+      const sel = h('select', { class: 'dm-input' },
+        h('option', { value: '' }, 'Alle'),
+        values.map((v) => h('option', { value: v, selected: pick[k] === v }, v))) as HTMLSelectElement;
+      sel.addEventListener('change', () => { pick[k] = sel.value || undefined; pick.id = undefined; this.renderMenu(); });
+      filters.push(field(label, sel));
+    }
+    const shown = items.filter((p) => matches(p));
+    const chosen = shown.find((p) => p.id === pick.id) ?? shown[0];
+    const variant = h('select', { class: 'dm-input' }, shown.map((p) => h('option', { value: p.id, selected: p === chosen }, connShort(p)))) as HTMLSelectElement;
+    variant.addEventListener('change', () => { pick.id = variant.value; this.renderMenu(); });
+    return h('details', { class: 'dm-toolset dm-conn', open },
+      h('summary', {}, `${sub} (${items.length})`),
+      filters.length ? h('div', { class: 'dm-conn-filters' }, ...filters) : '',
+      shown.length > 1 ? field('Variante', variant) : '',
+      chosen ? this.connCard(chosen) : h('p', { class: 'dm-muted small' }, 'Keine passende Variante. Setz einen Filter auf „Alle“.'));
+  }
+
+  private connCard(p: ShopProduct): HTMLElement {
+    const c = p.conn;
+    const key = `conn:${p.id}`;
+    const facts = [c?.kind, [c?.diameter && `Ø ${c.diameter}`, c?.length].filter(Boolean).join(' · '), [c?.material, c?.finish].filter(Boolean).join(', '), c?.pack && `Inhalt: ${c.pack}`]
+      .filter(Boolean) as string[];
+    return h('div', { class: 'dm-conn-card' },
+      h('div', { class: 'dm-favrow dm-toolrow' },
+        h('a', { class: 'dm-favlink', href: this.shopLink(p.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' }, productImage(p),
+          h('span', { class: 'dm-product-text' }, h('strong', {}, p.name),
+            h('span', { class: 'dm-muted small' }, [SHOP_LABEL[p.source], p.price != null ? euro(p.price) : ''].filter(Boolean).join(' · ')))),
+        h('button', { class: `dm-fav${this.favs.has(key) ? ' active' : ''}`, title: 'Merken', onclick: () => {
+          this.toggleFav({ key, name: p.name, url: p.url, image: p.image, source: p.source, price: p.price }); this.renderMenu();
+        } }, icon(ICON_HEART))),
+      facts.length ? h('ul', { class: 'dm-conn-facts dm-muted small' }, facts.map((f) => h('li', {}, f))) : '',
+      this.inDiy ? h('button', { class: 'dm-btn small primary', onclick: () => this.addHardware(p) }, '+ Zum Bauplan') : '');
+  }
+
+  /** Verbindung auf die Materialliste des DIY-Möbels setzen (oder die Anzahl erhöhen). */
+  private addHardware(p: ShopProduct, delta = 1): void {
+    if (!this.scene?.diy) return;
+    const next = clone(this.scene);
+    const list = (next.diyHardware ??= []);
+    const row = list.find((r) => r.product.catalog_id === p.id || r.product.url === p.url);
+    if (row) row.count = Math.max(0, row.count + delta);
+    else if (delta > 0) list.push({ product: { source: p.source, name: p.name, url: p.url, sku: '', image: p.image, price: p.price, catalog_id: p.id }, count: delta, sub: p.conn?.sub });
+    next.diyHardware = list.filter((r) => r.count > 0);
+    this.apply(next, false);
+    if (delta > 0 && !row) this.toast(`„${p.name}“ steht jetzt in der Materialliste.`);
+    this.renderPanel();
+    if (this.sheet === 'shop') this.renderSheet();
+  }
+
+  /** Passendes Shop-Produkt für eine vom Programm berechnete Schraube (Durchmesser × Länge in mm). */
+  private screwProduct(dia: number, len: number): ShopProduct | undefined {
+    const screws = this.connProducts.filter((p) => /schraube/i.test(p.conn?.sub ?? '') && !/schloss|confirmat|m\d/i.test(`${p.name} ${p.conn?.diameter}`));
+    const mm = (v: string | undefined) => { const n = parseFloat((v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : NaN; };
+    const sized = screws.filter((p) => Math.abs(mm(p.conn?.diameter) - dia) < 0.01);
+    const exact = sized.find((p) => mm(p.conn?.length) === len);
+    if (exact) return exact;
+    // gleiche Stärke, nächstkürzere Länge (zu lang darf nicht durchstoßen), sonst das Sortiment
+    const shorter = sized.filter((p) => mm(p.conn?.length) <= len).sort((a, b) => mm(b.conn?.length) - mm(a.conn?.length))[0];
+    return shorter ?? screws.find((p) => !p.conn?.length);
   }
 
   /** Menü „Bauplan“ im DIY-Bereich. */
@@ -1255,7 +1420,7 @@ export class App {
     } else if (s.objects.length > 1) {
       out.push(h('p', { class: 'dm-muted small' }, 'Noch keine Verbindungen: Schiebe zwei Teile Fläche an Fläche, dann setzt das Programm die Schrauben.'));
     }
-    out.push(...this.materialView(mat));
+    out.push(...this.materialView(mat, s));
     const builds = this.builds;
     out.push(h('h4', {}, 'Meine DIY-Möbel'),
       h('div', { class: 'dm-col' }, builds.map((b) => h('div', { class: 'dm-row' },
@@ -1411,6 +1576,7 @@ export class App {
       tools: () => this.toolsMenu(),
       diy: () => this.diyMenu(),
       parts: () => this.partsMenu(),
+      conn: () => this.connMenu(),
       account: () => this.accountMenu(),
     }[this.menu]();
     requestAnimationFrame(() => this.updateShift());
@@ -1746,8 +1912,20 @@ export class App {
     const next = clone(this.scene!);
     const o = next.objects.find((x) => x.id === id);
     if (!o) return;
-    o.rotation = (((o.rotation + deg) % 360) + 360) % 360;
-    this.apply(next, true);
+    // Werkbank: verschraubte Teile drehen als Ganzes um das gewählte Teil
+    const group = next.diy ? connected(next.objects, next.diyOff, id) : [id];
+    const a = (deg * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+    for (const gid of group) {
+      const x = next.objects.find((v) => v.id === gid);
+      if (!x) continue;
+      if (x !== o) {
+        const dx = x.position[0] - o.position[0], dy = x.position[1] - o.position[1];
+        x.position[0] = Math.round((o.position[0] + dx * cos - dy * sin) * 1000) / 1000;
+        x.position[1] = Math.round((o.position[1] + dx * sin + dy * cos) * 1000) / 1000;
+      }
+      x.rotation = (((x.rotation + deg) % 360) + 360) % 360;
+    }
+    this.apply(next, true, new Set(group));
   }
 
   // ------------------------------------------------------------------ Entfernen
@@ -2110,8 +2288,8 @@ export class App {
     return {
       title: `${this.inDiy ? 'Materialliste' : 'Einkaufsliste'}${rows.length ? ` (${rows.reduce((n, g) => n + g.count, 0)})` : ''}`,
       body: [
-        ...(this.inDiy && this.scene ? this.materialView(materials(this.scene, this.catalog)) : []),
-        ...(!this.inDiy ? this.placedBuilds().flatMap((b) => [h('h4', { class: 'dm-diyhead' }, `DIY-Möbel: ${b.name}`), ...this.materialView(materials(b.scene, this.catalog))]) : []),
+        ...(this.inDiy && this.scene ? this.materialView(materials(this.scene, this.catalog), this.scene) : []),
+        ...(!this.inDiy ? this.placedBuilds().flatMap((b) => [h('h4', { class: 'dm-diyhead' }, `DIY-Möbel: ${b.name}`), ...this.materialView(materials(b.scene, this.catalog), b.scene)]) : []),
         this.inDiy && rows.length > 0 && h('h4', {}, 'Produkte'),
         rows.length
           ? h('div', { class: 'dm-favs-list' }, rows.map((g) => h('div', { class: `dm-favrow${g.key === current ? ' current' : ''}` },
@@ -2189,7 +2367,11 @@ export class App {
         ${mat.cuts.length ? `<h3>Zuschnitt</h3><ul>${li(mat.cuts)}</ul>` : ''}
         ${mat.furniture.length ? `<h3>Möbel</h3><ul>${li(mat.furniture)}</ul>` : ''}
         ${mat.hardware.length ? `<h3>Kleinteile</h3><ul>${li(mat.hardware)}</ul>` : ''}
-        ${mat.screws.length ? `<h3>Schrauben</h3><ul>${mat.screws.map((r) => `<li><strong>${r.count} × ${esc(r.label)}</strong> <span class="m">· vorbohren ${num(r.pilot)} mm</span></li>`).join('')}</ul>` : ''}
+        ${mat.screws.length ? `<h3>Schrauben</h3><ul>${mat.screws.map((r) => {
+          const p = this.screwProduct(r.dia, r.len);
+          return `<li><strong>${r.count} × ${esc(r.label)}</strong> <span class="m">· vorbohren ${num(r.pilot)} mm</span>${p ? `<br><span class="m">Passend: ${esc(p.name)}</span> <a href="${esc(this.shopLink(p.url))}">${esc(this.shopLink(p.url))}</a>` : ''}</li>`;
+        }).join('')}</ul>` : ''}
+        ${b.scene.diyHardware?.length ? `<h3>Verbindungen und Beschläge</h3><ul>${b.scene.diyHardware.map((r) => `<li><strong>${r.count} × ${esc(r.product.name)}</strong>${r.sub ? ` <span class="m">· ${esc(r.sub)}</span>` : ''}<br><a href="${esc(this.shopLink(r.product.url))}">${esc(this.shopLink(r.product.url))}</a></li>`).join('')}</ul>` : ''}
         ${mat.joints.length ? `<h3>Bohrplan</h3><ol>${mat.joints.map((j) => `<li><strong>${esc(this.jointLabel(j))}</strong>: ${j.screws.length} × ${num(j.dia)} × ${j.len} mm.
           <span class="m">Kontaktfläche ${num(j.area[0])} × ${num(j.area[1])} cm, Bohrpunkte von der Ecke gemessen (cm): ${j.points.map((p) => `${num(p[0])} / ${num(p[1])}`).join(' · ')}</span></li>`).join('')}</ol>` : ''}`;
     }).join('');
@@ -2549,7 +2731,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ Menü, Farben, Stile
 
-type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style' | 'tools' | 'diy' | 'parts' | 'account';
+type MenuId = 'view' | 'room' | 'select' | 'remove' | 'color' | 'furniture' | 'style' | 'tools' | 'diy' | 'parts' | 'conn' | 'account';
 type SheetId = 'save' | 'favs' | 'shop' | 'render';
 type Theme = 'light' | 'dark' | 'auto';
 
@@ -2577,6 +2759,7 @@ const MENUS: { id: MenuId; label: string; icon: string }[] = [
   { id: 'view', label: 'Ansicht', icon: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>' },
   { id: 'room', label: 'Raum', icon: '<path d="M4 4h16v16H4z"/><path d="M4 13h7v7M14 4v6h6"/>' },
   { id: 'parts', label: 'Bauteile', icon: '<path d="M3 14l9-5 9 5-9 5z"/><path d="M3 14v3l9 5 9-5v-3"/><path d="M8 6.5l4-2.2 4 2.2"/>' },
+  { id: 'conn', label: 'Verbindungen', icon: '<path d="M9 3h6l-1 3h-4z"/><path d="M12 6v15"/><path d="M10 9l4 1.5M10 12l4 1.5M10 15l4 1.5M10 18l2 1"/>' },
   { id: 'furniture', label: 'Möbel', icon: '<path d="M5 11V8a2 2 0 012-2h10a2 2 0 012 2v3"/><path d="M3 12a2 2 0 014 0v2h10v-2a2 2 0 014 0v5H3z"/><path d="M5 17v2M19 17v2"/>' },
   { id: 'style', label: 'Style', icon: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>' },
   { id: 'color', label: 'Farbe', icon: '<path d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.8 0-1.4-1-1.9 0-2.9s3 0 4.2-1.1C20.5 14 21 13 21 11c0-4.4-4-8-9-8z"/><circle cx="7.5" cy="11.5" r="1.1"/><circle cx="10" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>' },
@@ -2638,6 +2821,18 @@ function shopOf(url: string): Product['source'] {
   if (/(^|\.)ikea\./.test(host)) return 'ikea';
   if (/(^|\.)(amazon\.|amzn\.)/.test(host)) return 'amazon';
   return 'other';
+}
+
+/** Reihenfolge der Unterkategorien im Menü „Verbindungen“ */
+const CONN_ORDER = ['Schrauben', 'Nägel', 'Winkel', 'Scharniere', 'Griffe', 'Dübel', 'Holzdübel/Lamellos', 'Möbelverbinder', 'Regalträger', 'Haken'];
+
+const naturalSort = (a: string, b: string) => a.localeCompare(b, 'de', { numeric: true });
+
+/** Kurzer Name einer Variante: Maße, sonst der Produktname */
+function connShort(p: ShopProduct): string {
+  const c = p.conn;
+  const dims = [c?.diameter, c?.length].filter(Boolean).join(' × ');
+  return dims ? `${dims} · ${p.name}` : p.name;
 }
 
 const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });

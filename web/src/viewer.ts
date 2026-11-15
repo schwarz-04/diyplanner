@@ -4,7 +4,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { buildScene } from './build';
-import { buildScrews } from './diy';
+import { buildScrews, connected } from './diy';
 import { Measure } from './measure';
 import { WalkControls, type Blocker } from './walk';
 import { toHome, toWorld, walkStart, walkWorld } from './home';
@@ -22,6 +22,8 @@ export interface ViewerEvents {
   onObjectMoved: (id: string, position: [number, number, number], rotation: number) => void;
   /** Während des Ziehens (noch nicht gespeichert), z. B. für den Grundriss. */
   onObjectMoving?: (id: string, position: [number, number, number], rotation: number) => void;
+  /** Werkbank: verschraubte Teile wurden gemeinsam bewegt */
+  onGroupMoved?: (moves: { id: string; position: [number, number, number]; rotation: number }[]) => void;
   onMeasured?: (meters: number) => void;
   /** Standort beim Begehen (gemeinsamer Grundriss). */
   onWalk?: (x: number, y: number, yaw: number) => void;
@@ -54,6 +56,8 @@ export class Viewer {
   private selection: Selection = null;
   private selectionBox: THREE.BoxHelper | null = null;
   private sceneData: Scene | null = null;
+  /** Werkbank: Startlage der verschraubten Teile, die beim Ziehen mitwandern */
+  private group: { lead: { p: THREE.Vector3; r: number }; members: Map<string, { node: THREE.Object3D; p: THREE.Vector3; r: number }>; valid?: Map<string, { p: THREE.Vector3; r: number }> } | null = null;
   private mode: ViewMode = 'orbit';
   private pointerDown: { x: number; y: number } | null = null;
   private resizeObserver: ResizeObserver;
@@ -111,7 +115,8 @@ export class Viewer {
     this.gizmo.addEventListener('dragging-changed', (e) => {
       const v = (e as unknown as { value: boolean }).value;
       this.controls.enabled = !v && !this.placing;
-      if (!v) this.commitTransform();
+      if (v) this.beginGroup();
+      else this.commitTransform();
     });
     this.gizmo.addEventListener('objectChange', () => this.objectChanged());
     // Nur die drei Pfeile zeigen: die Flächen- und Mittelgriffe verwirren und verdecken das Möbel.
@@ -312,8 +317,11 @@ export class Viewer {
         const top = Math.max(0, (this.sceneData?.room.height ?? 2.5) - (size?.[2] ?? 0));
         node.position.y = THREE.MathUtils.clamp(node.position.y, 0, top);
         if (this.sceneData?.diy) {
-          this.snapToParts(node, sel.id);
-          this.blockCollision(node, sel.id);
+          if (this.group?.members.size) this.moveGroup(node, sel.id);
+          else {
+            this.snapToParts(node, sel.id);
+            this.blockCollision(node, sel.id);
+          }
         }
         const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
         this.events.onObjectMoving?.(sel.id, threeToPlan(node.position), rot);
@@ -322,6 +330,78 @@ export class Viewer {
     this.selectionBox?.update();
     this.measure.updateSelection();
     this.updateHandles();
+  }
+
+  /** Werkbank: verschraubte Teile merken, die mit dem gewählten Teil mitwandern. */
+  private beginGroup(): void {
+    this.group = null;
+    const sel = this.selection;
+    if (!this.sceneData?.diy || sel?.kind !== 'object') return;
+    const node = this.nodes.get(sel.id);
+    if (!node) return;
+    const ids = connected(this.sceneData.objects, this.sceneData.diyOff, sel.id).filter((id) => id !== sel.id);
+    const members = new Map<string, { node: THREE.Object3D; p: THREE.Vector3; r: number }>();
+    for (const id of ids) {
+      const n = this.nodes.get(id);
+      if (n) members.set(id, { node: n, p: n.position.clone(), r: n.rotation.y });
+    }
+    this.group = { lead: { p: node.position.clone(), r: node.rotation.y }, members };
+  }
+
+  /** Alle verschraubten Teile wie ein Objekt bewegen und drehen (um das gewählte Teil). */
+  private moveGroup(node: THREE.Object3D, id: string): void {
+    const g = this.group!;
+    // Schraubenköpfe bleiben sonst beim Ziehen stehen; sie werden danach neu gesetzt
+    const screws = this.root?.getObjectByName('diy_screws');
+    if (screws) screws.visible = false;
+    const place = () => {
+      const dr = node.rotation.y - g.lead.r;
+      for (const m of g.members.values()) {
+        const off = m.p.clone().sub(g.lead.p).applyAxisAngle(new THREE.Vector3(0, 1, 0), dr);
+        m.node.position.copy(node.position).add(off);
+        m.node.rotation.y = m.r + dr;
+        m.node.updateWorldMatrix(true, false);
+      }
+      node.updateWorldMatrix(true, false);
+    };
+    place();
+    const all = [node, ...[...g.members.values()].map((m) => m.node)];
+    const ids = new Set([id, ...g.members.keys()]);
+    const box = () => all.reduce((b, n) => b.union(new THREE.Box3().setFromObject(n)), new THREE.Box3());
+    const others = [...this.nodes].filter(([oid, n]) => !ids.has(oid) && findData(n)?.dm_type === 'object').map(([, n]) => n);
+    // Einrasten an den anderen Teilen: über den gemeinsamen Umriss
+    const SNAP = 0.025;
+    const a = box();
+    const shift = new THREE.Vector3();
+    const best = [SNAP, SNAP, SNAP];
+    const axes = ['x', 'y', 'z'] as const;
+    for (const other of others) {
+      const b = new THREE.Box3().setFromObject(other);
+      axes.forEach((ax, i) => {
+        const [u, v] = axes.filter((k) => k !== ax);
+        if (a.max[u] < b.min[u] - SNAP || a.min[u] > b.max[u] + SNAP || a.max[v] < b.min[v] - SNAP || a.min[v] > b.max[v] + SNAP) return;
+        for (const d of [b.max[ax] - a.min[ax], b.min[ax] - a.max[ax], b.min[ax] - a.min[ax], b.max[ax] - a.max[ax]]) {
+          if (Math.abs(d) < best[i]) { best[i] = Math.abs(d); shift[ax] = d; }
+        }
+      });
+    }
+    if (shift.lengthSq() > 0) { node.position.add(shift); place(); }
+    // nicht unter den Boden
+    const low = box().min.y;
+    if (low < 0) { node.position.y -= low; place(); }
+    // Kollision mit nicht verschraubten Teilen: zurück auf die letzte gültige Lage
+    const hit = all.some((n) => {
+      const nb = new THREE.Box3().setFromObject(n).expandByScalar(-0.0015);
+      return others.some((o) => nb.intersectsBox(new THREE.Box3().setFromObject(o).expandByScalar(-0.0015)));
+    });
+    if (hit && g.valid) {
+      for (const n of all) {
+        const v = g.valid.get(n.uuid);
+        if (v) { n.position.copy(v.p); n.rotation.y = v.r; n.updateWorldMatrix(true, false); }
+      }
+    } else if (!hit) {
+      g.valid = new Map(all.map((n) => [n.uuid, { p: n.position.clone(), r: n.rotation.y }]));
+    }
   }
 
   /** Werkbank: Teile dürfen nicht ineinander geschoben werden. Bei Kollision zurück auf die letzte gültige Lage. */
@@ -465,6 +545,7 @@ export class Viewer {
         startAngle: Math.atan2(-(start.z - world.z), start.x - world.x), pointerId: e.pointerId, moved: false,
       };
       this.controls.enabled = false;
+      this.beginGroup();
       e.stopPropagation();
       e.preventDefault();
     };
@@ -888,8 +969,15 @@ export class Viewer {
     const node = this.nodes.get(sel.id);
     if (!node) return;
     node.position.y = Math.max(0, node.position.y);
-    const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
-    this.events.onObjectMoved(sel.id, threeToPlan(node.position), Math.round(rot * 10) / 10);
+    const deg = (n: THREE.Object3D) => Math.round((((THREE.MathUtils.radToDeg(n.rotation.y) % 360) + 360) % 360) * 10) / 10;
+    const g = this.group;
+    this.group = null;
+    if (g?.members.size && this.events.onGroupMoved) {
+      this.events.onGroupMoved([
+        { id: sel.id, position: threeToPlan(node.position), rotation: deg(node) },
+        ...[...g.members].map(([id, m]) => ({ id, position: threeToPlan(m.node.position), rotation: deg(m.node) })),
+      ]);
+    } else this.events.onObjectMoved(sel.id, threeToPlan(node.position), deg(node));
     this.selectionBox?.update();
     this.measure.updateSelection();
     this.updateHandles();

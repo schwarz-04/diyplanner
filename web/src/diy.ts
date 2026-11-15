@@ -243,7 +243,7 @@ export function buildScrews(scene: Scene): THREE.Group {
 // ------------------------------------------------------------------ Materialliste
 
 export interface CutRow { label: string; size: string; count: number }
-export interface ScrewRow { label: string; count: number; pilot: number }
+export interface ScrewRow { label: string; count: number; pilot: number; dia: number; len: number }
 export interface PartRow { product: Product; label: string; count: number }
 
 export interface Materials {
@@ -298,7 +298,7 @@ export function materials(scene: Scene, catalog: Catalog): Materials {
   const screws = new Map<string, ScrewRow>();
   for (const j of js) {
     const label = `Spanplattenschraube ${String(j.dia).replace('.', ',')} × ${j.len} mm`;
-    const row = screws.get(label) ?? { label, count: 0, pilot: j.pilot };
+    const row = screws.get(label) ?? { label, count: 0, pilot: j.pilot, dia: j.dia, len: j.len };
     row.count += j.screws.length;
     screws.set(label, row);
   }
@@ -359,6 +359,20 @@ export function withCasters(scene: Scene, label: string, size: [number, number, 
     next.objects.push({ id: uid('obj'), category: 'caster', label, position: [x, y, 0], rotation: 0, size: [...size], color: '#4a4a4a', product: null });
   }
   return next;
+}
+
+/** Alle Teile, die (auch über andere Teile) mit `id` verschraubt sind, einschließlich `id`. */
+export function connected(objects: SceneObject[], off: string[] | undefined, id: string): string[] {
+  const links = new Map<string, string[]>();
+  for (const j of joints(objects, off)) {
+    const a = j.through.id, b = j.into.id;
+    links.set(a, [...(links.get(a) ?? []), b]);
+    links.set(b, [...(links.get(b) ?? []), a]);
+  }
+  const seen = new Set([id]);
+  const todo = [id];
+  while (todo.length) for (const n of links.get(todo.pop()!) ?? []) if (!seen.has(n)) { seen.add(n); todo.push(n); }
+  return [...seen];
 }
 
 export const jointKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);

@@ -121,3 +121,7 @@ Optional zeigt `data-render="bild.jpg"` ein vorab gerendertes Bild beim Klick au
 - Möbel sind parametrische Modelle (aus Kategorie, Maßen und Farbe gebaut). Echte Produkte
   (IKEA, Amazon) werden später über `product` verknüpft.
 - Als Nächstes: fotorealistisches KI-Rendering der aktuellen Ansicht (Screenshot → Bildmodell).
+
+### Verbindungen (ab 0.16.0)
+
+Tabelle mit `Kategorie = Verbindungen` und den Spalten `Unterkategorie; Produktname; Art/Typ; Länge; Durchmesser; Material/Oberfläche; Farbe/Finish; Inhalt (Stückzahl); Produktlink; Bild-URL` (Semikolon, Komma oder Tab) unter „Raumplaner-Produkte → Tabelle importieren“ hochladen. Die Produkte erscheinen im Menü „Verbindungen“, gruppiert nach Unterkategorie, mit Auswahl nach Art, Länge und Durchmesser. Für die vom Programm berechneten Schrauben wird in der Materialliste das passende Produkt (gleicher Durchmesser, gleiche oder nächstkürzere Länge) verlinkt.

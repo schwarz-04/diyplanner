@@ -365,7 +365,7 @@ body.dm3d-vollbild { margin: 0; padding: 0; background: #faf8f5; overflow: hidde
 .dm-app.dm-wide .dm-side { display: flex; flex: none; min-height: 0; background: var(--dm-surface); border-right: 1px solid var(--dm-border); }
 .dm-app.dm-wide .dm-dock,
 .dm-app.dm-wide:has(.dm-overlay:not([hidden])) .dm-dock {
-  position: static; transform: none; display: flex; flex-direction: column; width: 70px; max-width: none; padding: 8px 5px; gap: 3px;
+  position: static; transform: none; display: flex; flex-direction: column; width: 80px; max-width: none; padding: 8px 5px; gap: 3px;
   border: 0; border-radius: 0; box-shadow: none; background: var(--dm-soft2); backdrop-filter: none; overflow-y: auto;
 }
 .dm-app.dm-wide.dm-panel-open .dm-dock { border-right: 1px solid var(--dm-border); }
@@ -641,3 +641,21 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 }
 .dm-app .dm-benchpanel.cut { align-items: flex-end; }
 .dm-app .dm-benchpanel.cut .dm-cutinfo { flex-basis: 100%; text-align: center; }
+
+/* Bauteile mit Maßeingabe */
+.dm-app .dm-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.dm-app .dm-partform .dm-grid { margin: 6px 0 4px; }
+.dm-app .dm-partform .dm-field { margin-top: 6px; }
+.dm-app .dm-dim-part { font-size: 11px; padding: 1px 6px; }
+
+/* Verbindungen */
+.dm-app .dm-conn-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; margin: 6px 0; }
+.dm-app .dm-conn .dm-field { margin-top: 6px; }
+.dm-app .dm-conn select.dm-input { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.dm-app .dm-conn-card { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.dm-app .dm-conn-facts { margin: 0; padding-left: 16px; }
+.dm-app .dm-matlink { display: block; font-size: 12px; color: var(--dm-accent); text-decoration: none; margin-top: 2px; }
+.dm-app .dm-matlink.inline { display: inline; font-size: inherit; }
+.dm-app .dm-matlink:hover { text-decoration: underline; }
+.dm-app .dm-hwrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.dm-app .dm-stepper { display: inline-flex; gap: 2px; flex: none; }

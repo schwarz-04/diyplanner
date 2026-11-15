@@ -87,6 +87,8 @@ export interface Scene {
   diy?: boolean;
   /** Werkbank: Verbindungen, die nicht verschraubt werden sollen ("idA|idB") */
   diyOff?: string[];
+  /** Werkbank: zusätzlich gewählte Verbindungen und Beschläge (Winkel, Scharniere, Griffe …) */
+  diyHardware?: { product: Product; count: number; sub?: string }[];
 }
 
 /** Ein Raum der Wohnung mit seiner Lage im gemeinsamen Grundriss (Drehung in Grad, gegen den Uhrzeigersinn). */
@@ -154,7 +156,19 @@ export interface ShopProduct {
   color: string;
   variants?: ProductVariant[];
   /** Bereich im Möbel-Menü (Spalte Kategorie der Produkttabelle) */
-  group?: 'regale' | 'moebel' | 'deko' | 'werkzeug';
+  group?: 'regale' | 'moebel' | 'deko' | 'werkzeug' | 'verbindung';
+  /** Verbindungen (Schrauben, Winkel, Scharniere …): Angaben aus der Produkttabelle */
+  conn?: ConnInfo;
+}
+
+export interface ConnInfo {
+  sub: string;
+  kind: string;
+  length: string;
+  diameter: string;
+  material: string;
+  finish: string;
+  pack: string;
 }
 
 export type Selection =

@@ -32,6 +32,8 @@ export class Measure {
   onEditGap: ((dx: number, dy: number, delta: number) => void) | null = null;
   /** Höhe über dem Boden eingegeben (Meter). */
   onEditElevation: ((meters: number) => void) | null = null;
+  /** Werkbank: Maß eines Teils angeklickt und geändert (Achse 0 Breite, 1 Tiefe, 2 Höhe; Meter). */
+  onEditSize: ((axis: 0 | 1 | 2, meters: number) => void) | null = null;
   /** Winkel-Anzeige beim Drehen */
   private angleLabel: CSS2DObject | null = null;
 
@@ -129,6 +131,10 @@ export class Measure {
     const minX = box.min.x, maxX = box.max.x, minY = -box.max.z, maxY = -box.min.z;
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const top = box.max.y;
+    if (this.data.diy && this.selSize) {
+      this.partDims(node, this.selSize);
+      return;
+    }
     if (this.selSize) {
       const [w, d, h] = this.selSize;
       this.selGroup.add(label(plan3(cx, cy, top + 0.18), `${c1(w)} × ${c1(d)} × ${c1(h)} cm`, 'object'));
@@ -158,6 +164,35 @@ export class Measure {
       const el = label(p1.clone().lerp(p2, 0.5), `↑ ${fmt(bottom)}`, 'gap');
       editable(el.element, bottom, 0, 600, (v) => this.onEditElevation?.(v));
       this.selGroup.add(el);
+    }
+  }
+
+  /** Werkbank: Maßpfeile an den Kanten des Teils (wie an den Wänden), Werte anklickbar. */
+  private partDims(node: THREE.Object3D, size: [number, number, number]): void {
+    const [w, d, h] = size;
+    node.updateWorldMatrix(true, false);
+    const parent = this.selGroup.parent;
+    const toLocal = parent ? parent.matrixWorld.clone().invert() : new THREE.Matrix4();
+    const m = toLocal.multiply(node.matrixWorld);
+    // Teil-Koordinaten (three): x = Breite, y = Höhe, z = -Tiefe, Ursprung unten Mitte
+    const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyMatrix4(m);
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).transformDirection(m).multiplyScalar(Math.hypot(x, y, z));
+    const off = 0.05;
+    const tk = 0.025;
+    const lines: { axis: 0 | 1 | 2; a: THREE.Vector3; b: THREE.Vector3; tick: THREE.Vector3; text: string }[] = [
+      // Breite: vordere Unterkante
+      { axis: 0, a: P(-w / 2, 0, d / 2 + off), b: P(w / 2, 0, d / 2 + off), tick: V(0, 0, tk), text: c1(w) },
+      // Tiefe: rechte Unterkante
+      { axis: 1, a: P(w / 2 + off, 0, d / 2), b: P(w / 2 + off, 0, -d / 2), tick: V(tk, 0, 0), text: c1(d) },
+      // Höhe: vordere linke Kante
+      { axis: 2, a: P(-w / 2 - off, 0, d / 2), b: P(-w / 2 - off, h, d / 2), tick: V(tk, 0, 0), text: c1(h) },
+    ];
+    for (const ln of lines) {
+      dimLine(this.selGroup, ln.a, ln.b, ln.tick, ACCENT);
+      // Hilfslinien von der Kante zum Maß
+      const l = label(ln.a.clone().lerp(ln.b, 0.5), `${ln.text} cm`, 'part');
+      editable(l.element, size[ln.axis], 0.1, 1000, (v) => this.onEditSize?.(ln.axis, v));
+      this.selGroup.add(l);
     }
   }
 
@@ -267,7 +302,9 @@ export function editable(el: HTMLElement, meters: number, minCm: number, maxCm: 
     input.type = 'number';
     input.min = String(minCm);
     input.max = String(maxCm);
-    input.value = String(Math.round(meters * 100));
+    const cmNow = Math.round(meters * 1000) / 10;
+    input.step = minCm < 1 ? '0.1' : '1';
+    input.value = String(cmNow);
     input.className = 'dm-dim-input';
     el.replaceChildren(input, document.createTextNode(' cm'));
     input.focus();
@@ -278,7 +315,7 @@ export function editable(el: HTMLElement, meters: number, minCm: number, maxCm: 
       done = true;
       const v = Number(input.value);
       el.textContent = text;
-      if (ok && Number.isFinite(v) && v >= minCm && v <= maxCm && Math.round(meters * 100) !== v) commit(v / 100);
+      if (ok && Number.isFinite(v) && v >= minCm && v <= maxCm && Math.abs(cmNow - v) > 0.01) commit(v / 100);
     };
     input.addEventListener('keydown', (e) => {
       e.stopPropagation();

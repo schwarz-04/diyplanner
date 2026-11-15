@@ -24,6 +24,13 @@ class DM3D_Import
         'variants' => ['farbvarianten', 'farben', 'farbe', 'farbvariante', 'colors', 'color'],
         'image' => ['bild-url', 'bildurl', 'bild url', 'image', 'image url', 'bild-link', 'bildlink'],
         'price' => ['preis', 'price', 'preis €', 'preis eur'],
+        // Verbindungen (Schrauben, Winkel, Scharniere …): Varianten im Werkbank-Menü
+        'sub' => ['unterkategorie', 'subkategorie', 'unterart'],
+        'kind' => ['art/typ', 'art / typ', 'ausführung'],
+        'diameter' => ['durchmesser', 'ø', 'stärke'],
+        'material' => ['material/oberfläche', 'material', 'oberfläche'],
+        'finish' => ['farbe/finish', 'finish'],
+        'pack' => ['inhalt', 'stückzahl', 'packungsinhalt', 'menge'],
     ];
 
     /** Deutsche Bezeichnungen -> 3D-Modell (Schlüssel aus catalog.json). Reihenfolge: spezifisch vor allgemein. */
@@ -55,6 +62,8 @@ class DM3D_Import
         'regal' => 'shelf', 'regale' => 'shelf', 'möbel' => 'furniture', 'moebel' => 'furniture',
         'deko' => 'deko', 'dekoration' => 'deko', 'accessoires' => 'deko', 'wohnaccessoires' => 'deko',
         'werkzeug' => 'tool', 'werkzeuge' => 'tool', 'zubehör' => 'tool', 'zubehoer' => 'tool',
+        'verbindungen' => 'connector', 'verbindung' => 'connector', 'verbindungsmittel' => 'connector',
+        'beschläge' => 'connector', 'beschlag' => 'connector', 'befestigung' => 'connector',
     ];
 
     /** Farb- und Materialnamen -> Farbton. Längere Namen zuerst prüfen. */
@@ -148,13 +157,15 @@ class DM3D_Import
             $name = $get('name');
             if ($name === '') continue;
             $url = esc_url_raw($get('url'));
+            $is_conn = (self::GENERIC[self::norm($get('category'))] ?? '') === 'connector';
             $category = self::category($get('category'), $name, $catalog);
-            if ($category === null) {
+            if ($category === null && !$is_conn) {
                 $report['warnings'][] = "Zeile $line ($name): Kein passendes 3D-Modell gefunden, als einfacher Quader dargestellt.";
                 $category = 'box';
             }
+            if ($is_conn) $category = 'box';
             // Ohne Farbvarianten: Farbe aus dem Produktnamen („IVAR Schrank – Kiefer“), sonst Standardfarbe des Modells
-            $fallback = self::color_for(self::norm($name)) ?? ($catalog[$category]['color'] ?? '#c9b8a0');
+            $fallback = $is_conn ? '#b9bcbf' : self::color_for(self::norm($name)) ?? ($catalog[$category]['color'] ?? '#c9b8a0');
             $variants = self::variants($get('variants'), $fallback, $unknown);
             foreach ($unknown as $u) $report['warnings'][] = "Zeile $line ($name): Farbe „{$u}“ unbekannt, bitte mit Farbcode angeben (z. B. „{$u} #a9b9a6“).";
 
@@ -168,6 +179,21 @@ class DM3D_Import
                 $id = wp_insert_post($data);
                 if (!$id || is_wp_error($id)) continue;
                 $report['created']++;
+            }
+            if ($is_conn) {
+                // Verbindungen: „30 mm“, „M6“, „40 x 40 x 40 mm“ als Text, kein 3D-Modell
+                $length_col = $map['depth'] ?? null;
+                $conn = [
+                    'url' => $url, 'image' => esc_url_raw($get('image')), 'category' => 'box', 'group' => 'verbindung',
+                    'width' => '', 'depth' => '', 'height' => '',
+                    'sub' => $get('sub') ?: 'Sonstiges', 'kind' => $get('kind'),
+                    'length' => $length_col !== null ? trim((string) ($row[$length_col] ?? '')) : '',
+                    'diameter' => $get('diameter'), 'material' => $get('material'), 'finish' => $get('finish'), 'pack' => $get('pack'),
+                    'variants' => '',
+                ];
+                if (isset($map['price'])) $conn['price'] = self::number($get('price'));
+                foreach ($conn as $k => $v) update_post_meta($id, '_dm3d_' . $k, $v);
+                continue;
             }
             [$width, $depth, $height] = self::dims($category, $catalog, self::number($get('width')), self::number($get('depth')), self::number($get('height')));
             $meta = [
@@ -237,7 +263,7 @@ class DM3D_Import
         }
         // Sammelbegriff (Regal, Möbel, Deko) oder leer: Modell aus dem Produktnamen
         $group = self::GENERIC[$v] ?? null;
-        if ($group === 'tool') return 'box'; // Werkzeug: kein 3D-Modell nötig
+        if ($group === 'tool' || $group === 'connector') return 'box'; // Werkzeug: kein 3D-Modell nötig
         $hit = self::find_word(self::norm($name), $group, $catalog);
         if ($hit !== null) return $hit;
         return ['shelf' => 'shelf'][$group] ?? null;
