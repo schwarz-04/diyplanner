@@ -46,8 +46,9 @@ class DM3D_Claude
     public static function analyze(array $input, string $kind, string $hint): array
     {
         $data_dir = DM3D_DIR . 'data/';
-        $system = (string) file_get_contents($data_dir . 'analysis-prompt.txt');
-        $schema = json_decode((string) file_get_contents($data_dir . 'room-analysis.schema.json'), true);
+        $apartment = $kind === 'apartment';
+        $system = (string) file_get_contents($data_dir . ($apartment ? 'apartment-prompt.txt' : 'analysis-prompt.txt'));
+        $schema = json_decode((string) file_get_contents($data_dir . ($apartment ? 'apartment-analysis.schema.json' : 'room-analysis.schema.json')), true);
 
         $content = [];
         foreach ($input['images'] ?? [] as $img) {
@@ -63,12 +64,20 @@ class DM3D_Claude
             ];
         }
         $n = count($input['images'] ?? []);
+        // Wohnung: die ersten plan_images Bilder (oder das PDF) sind der Grundriss, der Rest ergänzende Fotos/Videobilder
+        $plan = (int) ($input['plan_images'] ?? 0);
+        $extra = max(0, $n - $plan);
+        $apartment_intro = ($input['pdf'] ?? null)
+            ? 'Das PDF ist der Grundriss der Wohnung.' . ($n ? " Die $n Bilder sind ergänzende Fotos oder Videobilder der Räume." : '')
+            : ($plan > 1 ? "Die ersten $plan Bilder sind der Grundriss der Wohnung (mehrere Seiten oder Ausschnitte)." : 'Das erste Bild ist der Grundriss der Wohnung.')
+              . ($extra ? " Die folgenden $extra Bilder sind ergänzende Fotos oder Videobilder der Räume: nur für Möbel, Farben und Böden, nicht für Maße." : '');
         $intro = [
+            'apartment' => $apartment_intro . ' Rekonstruiere alle Räume der Wohnung.',
             'video' => "Die $n Bilder sind Einzelbilder aus einem Rundum-Video eines Raums, in zeitlicher Reihenfolge.",
             'photos' => "Die $n Bilder sind Fotos desselben Raums aus verschiedenen Blickwinkeln.",
             'floorplan' => 'Das ist ein Grundriss. Rekonstruiere den Raum daraus.',
         ][$kind] ?? 'Rekonstruiere den Raum aus diesen Bildern.';
-        $text = $intro . ' Erstelle die Raumbeschreibung.';
+        $text = $intro . ($apartment ? ' Erstelle die Beschreibung der ganzen Wohnung.' : ' Erstelle die Raumbeschreibung.');
         if ($hint !== '') {
             $text .= "\n\nHinweis des Nutzers: " . $hint;
         }
@@ -76,7 +85,7 @@ class DM3D_Claude
 
         $body = [
             'model' => self::model(),
-            'max_tokens' => 16000,
+            'max_tokens' => $apartment ? 32000 : 16000,
             'system' => $system,
             'thinking' => ['type' => 'adaptive'],
             'output_config' => [
@@ -89,7 +98,7 @@ class DM3D_Claude
         ];
 
         $response = wp_remote_post(self::ENDPOINT, [
-            'timeout' => 300,
+            'timeout' => $apartment ? 540 : 300,
             'headers' => [
                 'content-type' => 'application/json',
                 'x-api-key' => self::api_key(),
@@ -122,7 +131,7 @@ class DM3D_Claude
         foreach ($result['content'] ?? [] as $block) {
             if (($block['type'] ?? '') === 'text') {
                 $analysis = json_decode($block['text'], true);
-                if (is_array($analysis) && isset($analysis['corners'])) {
+                if (is_array($analysis) && (isset($analysis['corners']) || ($apartment && !empty($analysis['rooms'])))) {
                     return $analysis;
                 }
             }

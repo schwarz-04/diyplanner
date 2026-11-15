@@ -1,5 +1,5 @@
 import { Api } from './api';
-import { analysisToScene, prepareInput } from './analysis';
+import { analysisToScene, apartmentToHome, isApartment, prepareApartment, prepareInput, type RoomAnalysis } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
 import { PART_DEFAULTS, attach, collisions, composeObject, connected, freeSpot, isBauteil, cutTo, jointKey, materials, newBuild, splitAt, tip, withCasters, type Joint, type Materials } from './diy';
@@ -84,6 +84,8 @@ export class App {
   private diyId = '';
   private roomActive = 0;
   private elMode = h('div', { class: 'dm-modebar needs-project' });
+  /** Leiste unten: ganze Wohnung oder einen Raum herausgreifen */
+  private elRooms = h('div', { class: 'dm-roombar needs-project', hidden: true });
   private elBench = h('div', { class: 'dm-bench', hidden: true });
   private benchPanel: 'size' | 'cut' | 'color' | null = null;
   /** Verschrauben: dieses Teil wird an das nächste angeklickte Teil geschoben */
@@ -156,7 +158,7 @@ export class App {
       ),
       h('div', { class: 'dm-main' },
         h('aside', { class: 'dm-side' }, this.elDock, this.elPop),
-        h('div', { class: 'dm-stage' }, this.elCanvas, this.elMode, this.elToolbar, this.elBench, this.elVersion,
+        h('div', { class: 'dm-stage' }, this.elCanvas, this.elMode, this.elRooms, this.elToolbar, this.elBench, this.elVersion,
           h('div', { class: 'dm-zoom needs-project' },
             h('button', { class: 'dm-round', title: 'Hineinzoomen', onclick: () => this.viewer.zoom(0.8) }, '+'),
             h('button', { class: 'dm-round', title: 'Herauszoomen', onclick: () => this.viewer.zoom(1.25) }, '−'),
@@ -290,66 +292,88 @@ export class App {
 
   private showStart(): void {
     if (this.opts.demo) {
-      this.demoNotice('Für einen neuen Raum aus Video, Fotos oder Grundriss braucht es den Server mit der KI-Analyse. Diese Demo zeigt die fertig analysierte Küche.');
+      this.demoNotice('Für eine neue Wohnung aus einem Grundriss braucht es den Server mit der KI-Analyse. Diese Demo zeigt eine fertig eingerichtete Wohnung.');
       return;
     }
-    let kind = 'video';
-    const fileInput = h('input', { type: 'file', multiple: true, accept: 'video/*', class: 'dm-file' }) as HTMLInputElement;
+    const err = h('p', { class: 'dm-error', hidden: true });
+    const fail = (text: string) => { err.textContent = text; err.hidden = false; };
+    const blocked = !this.canCreate || !this.analysisAvailable;
+
+    // Hauptweg: Grundriss der Wohnung, Fotos und Videos nur ergänzend
+    const planInput = h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'dm-file' }) as HTMLInputElement;
+    const extraInput = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, class: 'dm-file' }) as HTMLInputElement;
     const hint = h('textarea', {
       class: 'dm-input', rows: 2,
-      placeholder: 'Optional: Hinweise, z. B. "Wohnzimmer, Deckenhöhe 2,50 m, Fensterwand 4,20 m"',
+      placeholder: 'Optional: Hinweise, z. B. "Deckenhöhe 2,50 m, Altbau, Bad hat eine Dusche"',
     }) as HTMLTextAreaElement;
-    const accept: Record<string, string> = { video: 'video/*', photos: 'image/*', floorplan: 'image/*,application/pdf' };
+    const go = h('button', {
+      class: 'dm-btn primary', disabled: blocked,
+      onclick: async () => {
+        const plan = Array.from(planInput.files ?? []);
+        if (!plan.length) return fail('Bitte zuerst den Grundriss auswählen.');
+        await this.create('apartment', plan, hint.value, Array.from(extraInput.files ?? []));
+      },
+    }, 'Wohnung erstellen');
+
+    // Ohne Grundriss: einzelner Raum aus Video oder Fotos (Maße geschätzt)
+    let kind = 'video';
+    const roomInput = h('input', { type: 'file', multiple: true, accept: 'video/*', class: 'dm-file' }) as HTMLInputElement;
+    const accept: Record<string, string> = { video: 'video/*', photos: 'image/*' };
     const help: Record<string, string> = {
       video: 'Langsam einmal rundherum filmen, Kamera auf Brusthöhe, 20–60 Sekunden.',
       photos: '4–12 Fotos aus verschiedenen Ecken, möglichst viel Wand und Boden im Bild.',
-      floorplan: 'Grundriss als Bild oder PDF, gerne mit Maßen.',
     };
-    const helpEl = h('p', { class: 'dm-muted' }, help.video);
-    const tabs = Object.keys(KIND_LABEL).map((k) =>
+    const helpEl = h('p', { class: 'dm-muted small' }, help.video);
+    const tabs = Object.keys(KIND_LABEL).filter((k) => k !== 'floorplan').map((k) =>
       h('button', {
         class: `dm-tab${k === kind ? ' active' : ''}`,
         onclick: (e: Event) => {
           kind = k;
-          fileInput.accept = accept[k];
+          roomInput.accept = accept[k];
           helpEl.textContent = help[k];
           tabs.forEach((t) => t.classList.toggle('active', t === e.currentTarget));
         },
       }, KIND_LABEL[k]));
-    const err = h('p', { class: 'dm-error', hidden: true });
-    const go = h('button', {
-      class: 'dm-btn primary',
-      disabled: !this.canCreate || !this.analysisAvailable,
+    const goRoom = h('button', {
+      class: 'dm-btn small', disabled: blocked,
       onclick: async () => {
-        const files = Array.from(fileInput.files ?? []);
-        if (!files.length) {
-          err.textContent = 'Bitte zuerst eine Datei auswählen.';
-          err.hidden = false;
-          return;
-        }
+        const files = Array.from(roomInput.files ?? []);
+        if (!files.length) return fail('Bitte zuerst ein Video oder Fotos auswählen.');
         await this.create(kind, files, hint.value);
       },
-    }, 'Raum erstellen');
+    }, 'Einzelnen Raum erstellen');
 
     if (!this.scene) this.startShowcase();
     this.showOverlay(
       h('div', { class: 'dm-card' },
-        h('h2', {}, 'Neuen Raum erstellen'),
-        h('p', {}, 'Lade ein Video, Fotos oder einen Grundriss hoch. Die KI baut daraus eine 3D-Szene, die du frei bearbeiten kannst.'),
-        h('div', { class: 'dm-tabs' }, tabs),
-        helpEl,
-        fileInput,
+        h('h2', {}, 'Deine Wohnung planen'),
+        h('p', {}, 'Lade den Grundriss deiner Wohnung hoch. Die KI baut daraus alle Räume maßstabsgetreu in 3D nach. Danach richtest du die ganze Wohnung ein oder nimmst dir einzelne Räume vor.'),
+        h('div', { class: 'dm-upstep' },
+          h('strong', {}, '1. Grundriss'),
+          h('span', { class: 'dm-muted small' }, 'Bild oder PDF, am besten mit Maßen. Die Maße kommen aus dem Plan.'),
+          planInput),
+        h('div', { class: 'dm-upstep' },
+          h('strong', {}, '2. Fotos oder Videos ', h('span', { class: 'dm-muted small' }, '(optional)')),
+          h('span', { class: 'dm-muted small' }, 'Damit übernimmt die KI deine Möbel, Wandfarben und Böden. Für die Maße zählt der Grundriss.'),
+          extraInput),
         hint,
-        !this.analysisAvailable && h('p', { class: 'dm-note' }, 'Hinweis: Die KI-Analyse ist noch nicht eingerichtet (API-Key fehlt in den Plugin-Einstellungen). Du kannst aber schon den Demo-Raum bearbeiten.'),
-        !this.canCreate && h('p', { class: 'dm-note' }, 'Bitte melde dich an, um einen Raum zu erstellen. ',
+        !this.analysisAvailable && h('p', { class: 'dm-note' }, 'Hinweis: Die KI-Analyse ist noch nicht eingerichtet (API-Key fehlt in den Plugin-Einstellungen). Du kannst aber schon die Demo-Wohnung bearbeiten.'),
+        !this.canCreate && h('p', { class: 'dm-note' }, 'Bitte melde dich an, um eine Wohnung zu erstellen. ',
           this.loginUrl && h('a', { href: this.loginUrl }, 'Zur Anmeldung')),
         err,
         h('div', { class: 'dm-row end' },
           this.scene && h('button', { class: 'dm-btn ghost', onclick: () => this.hideOverlay() }, 'Abbrechen'),
           !this.scene && h('button', { class: 'dm-btn ghost', onclick: () => this.showProjects() }, 'Meine Projekte'),
-          h('button', { class: 'dm-btn', disabled: !this.canCreate, onclick: () => this.create('demo', [], '') }, 'Demo-Raum öffnen'),
+          h('button', { class: 'dm-btn', disabled: !this.canCreate, onclick: () => this.create('demo', [], '') }, 'Demo-Wohnung öffnen'),
           go,
         ),
+        h('details', { class: 'dm-details dm-noplan' },
+          h('summary', {}, 'Kein Grundriss zur Hand? Einzelnen Raum aus Video oder Fotos'),
+          h('div', { class: 'dm-tabs' }, tabs),
+          helpEl,
+          roomInput,
+          h('p', { class: 'dm-muted small' }, 'Die Maße werden dabei geschätzt. Weitere Räume baust du später unter „Raum“ an.'),
+          h('div', { class: 'dm-row end' }, goRoom)),
       ),
     );
   }
@@ -399,16 +423,18 @@ export class App {
     this.elCaption.style.left = `calc(50% + ${sx}px)`;
   }
 
-  private async create(kind: string, files: File[], hint: string): Promise<void> {
+  private async create(kind: string, files: File[], hint: string, extra: File[] = []): Promise<void> {
     try {
       if (kind === 'demo') {
-        this.showProgress('Demo-Raum wird geladen');
+        this.showProgress('Demo-Wohnung wird geladen');
         const { id } = await this.api.createProject('demo', null, '');
         await this.openProject(id);
         return;
       }
       this.showProgress('Dateien werden vorbereitet');
-      const input = await prepareInput(files, (t) => this.showProgress(t));
+      const input = kind === 'apartment'
+        ? await prepareApartment(files, extra, (t) => this.showProgress(t))
+        : await prepareInput(files, (t) => this.showProgress(t));
       this.showProgress('Bilder werden hochgeladen');
       const { id } = await this.api.createProject(kind, input, hint);
       // Die Analyse läuft im Hintergrund; openProject fragt den Stand ab, falls die
@@ -426,15 +452,17 @@ export class App {
     const started = Date.now();
     while (p.state === 'queued' || p.state === 'analyzing') {
       const secs = Math.round((Date.now() - started) / 1000);
-      this.showProgress(`${p.step || 'Verarbeitung läuft'} (${secs} s, meist etwa eine Minute)`);
+      this.showProgress(`${p.step || 'Verarbeitung läuft'} (${secs} s, ${p.kind === 'apartment' ? 'bei einer ganzen Wohnung meist zwei bis vier Minuten' : 'meist etwa eine Minute'})`);
       await sleep(2000);
       p = await this.api.project(id);
     }
     if (p.state === 'error') throw new Error(p.error || 'Die Szene konnte nicht erstellt werden.');
     if (!p.scene && p.analysis) {
       // Erste Öffnung nach der Analyse: KI-Antwort in eine Szene umwandeln und speichern.
-      p.scene = analysisToScene(p.analysis, p.kind ?? 'video', this.catalog);
+      const apt = isApartment(p.analysis) ? p.analysis : null;
+      p.scene = apt ? apartmentToHome(apt, this.catalog) : analysisToScene(p.analysis as RoomAnalysis, p.kind ?? 'video', this.catalog);
       p = await this.api.saveScene(id, p.scene);
+      if (apt?.apartment_name) p = { ...p, ...(await this.api.saveMeta(id, { name: apt.apartment_name }).catch(() => ({}))) };
     }
     if (!p.scene) throw new Error('Die Szene konnte nicht erstellt werden.');
     return p as Project & { scene: Scene | Home };
@@ -453,6 +481,7 @@ export class App {
       this.undoStack = [];
       this.redoStack = [];
       this.stopShowcase();
+      this.viewer.setRoomFocus(false);
       const url = new URL(location.href);
       url.searchParams.set(this.opts.projectParam ?? 'projekt', id);
       history.replaceState(null, '', url);
@@ -570,7 +599,7 @@ export class App {
         h('button', { class: 'dm-btn primary', onclick: () => this.showStart() }, '+ Neues Projekt')),
       list.length
         ? h('div', { class: 'dm-projects' }, list.map(card))
-        : h('p', { class: 'dm-muted' }, 'Noch keine gespeicherten Projekte. Erstelle einen Raum oder öffne den Demo-Raum, er wird automatisch gesichert.'),
+        : h('p', { class: 'dm-muted' }, 'Noch keine gespeicherten Projekte. Erstelle eine Wohnung aus deinem Grundriss oder öffne die Demo-Wohnung, sie wird automatisch gesichert.'),
       h('p', { class: 'dm-muted small' }, 'Ohne Anmeldung merkt sich nur dieser Browser deine Projekte. Angemeldet findest du sie auf jedem Gerät.'),
       h('div', { class: 'dm-row end' }, h('button', { class: 'dm-btn ghost', onclick: back }, this.scene ? 'Zurück zum Raum' : 'Zurück'))));
   }
@@ -667,7 +696,9 @@ export class App {
     this.active = index;
     this.selection = null;
     this.viewer.setHome(this.home, index, true);
+    if (this.viewer.focused) this.viewer.frame(false);
     this.renderPanel();
+    this.renderRoomBar();
     this.toast(`${this.scene!.room.name || `Raum ${index + 1}`} wird bearbeitet`);
   }
 
@@ -1062,6 +1093,35 @@ export class App {
     this.elMode.replaceChildren(
       btn(false, ICON_PLAN, 'Raumplaner', 'Raum', 'Räume einrichten und Möbel stellen'),
       btn(true, ICON_TOOL, 'Virtuelle Werkbank', 'Werkbank', 'Eigene Möbel aus Möbeln, Platten und Rollen bauen'));
+    this.renderRoomBar();
+  }
+
+  /** Ganze Wohnung im Blick, bei Bedarf einen Raum herausgreifen (die anderen werden ausgeblendet). */
+  private renderRoomBar(): void {
+    const rooms = this.home?.rooms ?? [];
+    const show = !this.inDiy && rooms.length > 1 && this.viewer?.viewMode !== 'walk';
+    this.elRooms.hidden = !show;
+    if (!show) { this.elRooms.replaceChildren(); return; }
+    const focus = this.viewer.focused;
+    this.elRooms.replaceChildren(
+      h('button', { class: `dm-roomchip all${focus ? '' : ' active'}`, title: 'Alle Räume zeigen', onclick: () => this.focusRoom(null) }, icon(ICON_PLAN), 'Ganze Wohnung'),
+      h('span', { class: 'dm-sep' }),
+      ...rooms.map((r, i) => h('button', {
+        class: `dm-roomchip${focus && i === this.active ? ' active' : ''}${!focus && i === this.active ? ' current' : ''}`,
+        title: focus && i === this.active ? 'Wird bearbeitet' : 'Diesen Raum herausgreifen',
+        onclick: () => this.focusRoom(i),
+      }, r.scene.room.name || `Raum ${i + 1}`)));
+  }
+
+  /** null: ganze Wohnung zeigen; sonst diesen Raum bearbeiten und allein zeigen. */
+  private focusRoom(index: number | null): void {
+    if (index === null) {
+      this.viewer.setRoomFocus(false);
+    } else {
+      if (index !== this.active) this.switchRoom(index);
+      this.viewer.setRoomFocus(true);
+    }
+    this.renderRoomBar();
   }
 
   // ------------------------------------------------------------------ Werkbank-Leiste
@@ -1689,6 +1749,7 @@ export class App {
 
   private setView(mode: ViewMode): void {
     if (this.tool === 'measure') this.setTool('select');
+    if (mode === 'walk' && this.viewer.focused) this.viewer.setRoomFocus(false); // Begehen: durch alle Räume
     this.viewer.setMode(mode);
     if (mode === 'walk' && !this.wide) this.menu = null;
     if (mode !== 'walk') this.plan.setViewer(null);

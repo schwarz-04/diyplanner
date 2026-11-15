@@ -186,6 +186,7 @@ export class Viewer {
     this.active = Math.min(active, home.rooms.length - 1);
     home.rooms.forEach((r, index) => {
       const group = buildScene(r.scene);
+      group.visible = !this.roomFocus || index === this.active;
       group.position.set(r.position[0], 0, -r.position[1]);
       group.rotation.y = (r.rotation * Math.PI) / 180;
       group.userData.dm_room = index;
@@ -738,6 +739,19 @@ export class Viewer {
 
   get activeRoom(): number {
     return this.active;
+  }
+
+  /** Einzelnen Raum herausgreifen: die anderen Räume der Wohnung ausblenden (false: ganze Wohnung zeigen). */
+  private roomFocus = false;
+
+  setRoomFocus(on: boolean): void {
+    this.roomFocus = on;
+    for (const r of this.rooms) r.group.visible = !on || r.index === this.active;
+    this.frame(!on && (this.home?.rooms.length ?? 0) > 1);
+  }
+
+  get focused(): boolean {
+    return this.roomFocus;
   }
 
   /** Kamera so setzen, dass der Raum (all: die ganze Wohnung) sichtbar ist. */

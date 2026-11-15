@@ -5,7 +5,7 @@
  * 2. Die Antwort der KI (Format: shared/room-analysis.schema.json) in eine Szene umwandeln.
  */
 import { uid } from './edits';
-import type { Catalog, Category, Scene } from './types';
+import type { Catalog, Category, Home, Scene } from './types';
 
 export const IMAGE_MAX_SIDE = 1280;
 export const MAX_IMAGES = 16;
@@ -13,12 +13,17 @@ export const MAX_IMAGES = 16;
 export interface AnalysisInput {
   images: { media_type: 'image/jpeg'; data: string }[];
   pdf: string | null;
+  /** Wohnung: so viele der ersten Bilder sind der Grundriss (der Rest ergänzt Möbel und Farben) */
+  plan_images?: number;
 }
+
+/** Grundrisse brauchen mehr Auflösung, damit Maßzahlen lesbar bleiben. */
+export const PLAN_MAX_SIDE = 2400;
 
 // ------------------------------------------------------------------ Eingaben
 
-function toJpeg(source: CanvasImageSource, w: number, h: number): string {
-  const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(w, h));
+function toJpeg(source: CanvasImageSource, w: number, h: number, maxSide = IMAGE_MAX_SIDE): string {
+  const scale = Math.min(1, maxSide / Math.max(w, h));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(w * scale);
   canvas.height = Math.round(h * scale);
@@ -54,11 +59,11 @@ export async function videoFrames(file: File, count: number, onProgress?: (k: nu
   }
 }
 
-async function photo(file: File): Promise<string> {
+async function photo(file: File, maxSide = IMAGE_MAX_SIDE): Promise<string> {
   const bitmap = await createImageBitmap(file).catch(() => {
     throw new Error(`${file.name} lässt sich nicht lesen. Bitte als JPG oder PNG hochladen.`);
   });
-  const data = toJpeg(bitmap, bitmap.width, bitmap.height);
+  const data = toJpeg(bitmap, bitmap.width, bitmap.height, maxSide);
   bitmap.close();
   return data;
 }
@@ -90,6 +95,31 @@ export async function prepareInput(files: File[], onStep: (text: string) => void
     out.pdf = await base64(pdfs[0]);
   }
   if (!out.images.length && !out.pdf) throw new Error('Keine verwertbaren Dateien gefunden (Video, Foto oder Grundriss).');
+  return out;
+}
+
+/** Wohnung: Grundriss (Bild oder PDF) zuerst, danach ergänzende Fotos und Videos. */
+export async function prepareApartment(plan: File[], extra: File[], onStep: (text: string) => void): Promise<AnalysisInput> {
+  const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+  const pdf = plan.find(isPdf);
+  const planImages = plan.filter((f) => !isPdf(f)).slice(0, 3);
+  if (!pdf && !planImages.length) throw new Error('Bitte einen Grundriss als Bild oder PDF hochladen.');
+  const out: AnalysisInput = { images: [], pdf: null, plan_images: 0 };
+  if (pdf) {
+    if (pdf.size > 20 * 1024 * 1024) throw new Error('Das PDF ist größer als 20 MB.');
+    onStep('Grundriss wird vorbereitet');
+    out.pdf = await base64(pdf);
+  } else {
+    for (const f of planImages) {
+      onStep(`Grundriss wird vorbereitet: ${f.name}`);
+      out.images.push({ media_type: 'image/jpeg', data: await photo(f, PLAN_MAX_SIDE) });
+    }
+    out.plan_images = out.images.length;
+  }
+  if (extra.length) {
+    const more = await prepareInput(extra, onStep);
+    out.images.push(...more.images);
+  }
   return out;
 }
 
@@ -144,6 +174,31 @@ export function analysisToScene(a: RoomAnalysis, kind: string, catalog: Catalog)
     },
   };
   return normalizeScene(scene, catalog);
+}
+
+export interface ApartmentAnalysis {
+  apartment_name: string;
+  ceiling_height_m: number;
+  rooms: (Omit<RoomAnalysis, 'scale_reference' | 'confidence' | 'notes_de' | 'ceiling_height_m'> & { origin_x_m: number; origin_y_m: number })[];
+  scale_reference: string;
+  confidence: string;
+  notes_de: string;
+}
+
+export const isApartment = (a: unknown): a is ApartmentAnalysis => !!a && Array.isArray((a as ApartmentAnalysis).rooms);
+
+/** Antwort der KI für eine ganze Wohnung: jeder Raum mit seiner Lage im gemeinsamen Grundriss. */
+export function apartmentToHome(a: ApartmentAnalysis, catalog: Catalog): Home {
+  const rooms = a.rooms.filter((r) => r.corners?.length >= 3).map((r) => {
+    const scene = analysisToScene({
+      ...r, ceiling_height_m: a.ceiling_height_m, scale_reference: a.scale_reference, confidence: a.confidence, notes_de: '',
+    }, 'floorplan', catalog);
+    scene.meta.notes = '';
+    return { id: uid('room'), position: [Number(r.origin_x_m) || 0, Number(r.origin_y_m) || 0] as [number, number], rotation: 0, scene };
+  });
+  if (!rooms.length) throw new Error('Im Grundriss wurden keine Räume erkannt. Bitte einen deutlicheren Plan hochladen.');
+  rooms[0].scene.meta.notes = `${a.notes_de}\nMaßstab: ${a.scale_reference}\nSicherheit: ${a.confidence}`;
+  return { version: 2, rooms };
 }
 
 // ------------------------------------------------------------------ Normalisieren

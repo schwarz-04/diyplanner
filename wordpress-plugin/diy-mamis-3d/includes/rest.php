@@ -23,7 +23,7 @@ if (!defined('ABSPATH')) {
 class DM3D_Rest
 {
     const NS = 'dm3d/v1';
-    const MAX_IMAGES = 16;
+    const MAX_IMAGES = 24;
     const MAX_SCENE_BYTES = 2 * 1024 * 1024;
 
     public static function register(): void
@@ -80,20 +80,28 @@ class DM3D_Rest
 
     public static function demo_scene()
     {
-        return json_decode((string) file_get_contents(DM3D_DIR . 'data/demo-scene.json'), true);
+        return json_decode((string) file_get_contents(self::demo_file()), true);
+    }
+
+    /** Demo-Wohnung (alle Räume), bei älteren Daten der einzelne Demo-Raum. */
+    private static function demo_file(): string
+    {
+        $home = DM3D_DIR . 'data/demo-home.json';
+        return file_exists($home) ? $home : DM3D_DIR . 'data/demo-scene.json';
     }
 
     public static function create(WP_REST_Request $req)
     {
         $kind = (string) $req->get_param('kind');
-        if (!in_array($kind, ['video', 'photos', 'floorplan', 'demo'], true)) {
+        if (!in_array($kind, ['apartment', 'video', 'photos', 'floorplan', 'demo'], true)) {
             return self::error('Unbekannte Eingabeart.', 400);
         }
         if ($kind === 'demo') {
             [$id, $dir] = DM3D_Store::create();
-            $scene = json_decode((string) file_get_contents(DM3D_DIR . 'data/demo-scene.json'), true);
+            $scene = json_decode((string) file_get_contents(self::demo_file()), true);
             DM3D_Store::write($dir, 'scene.json', $scene);
-            DM3D_Store::status($dir, ['kind' => 'demo', 'state' => 'ready', 'version' => 1, 'created' => time(), 'user' => get_current_user_id()]);
+            DM3D_Store::status($dir, ['kind' => 'demo', 'state' => 'ready', 'version' => 1, 'created' => time(), 'user' => get_current_user_id(),
+                'name' => isset($scene['rooms']) ? 'Demo-Wohnung' : '']);
             self::remember($id);
             return ['id' => $id];
         }
@@ -120,8 +128,12 @@ class DM3D_Rest
             return self::error('Bitte mindestens eine Datei hochladen.', 400);
         }
         $hint = mb_substr(sanitize_textarea_field((string) $req->get_param('hint')), 0, 500);
+        $plan_images = $kind === 'apartment' ? min(count($images), max(0, (int) $req->get_param('plan_images'))) : 0;
+        if ($kind === 'apartment' && $pdf === '' && !$plan_images) {
+            return self::error('Bitte einen Grundriss hochladen (Bild oder PDF).', 400);
+        }
         [$id, $dir] = DM3D_Store::create();
-        DM3D_Store::write($dir, 'input.json', ['images' => $images, 'pdf' => $pdf ?: null, 'hint' => $hint]);
+        DM3D_Store::write($dir, 'input.json', ['images' => $images, 'pdf' => $pdf ?: null, 'hint' => $hint, 'plan_images' => $plan_images]);
         DM3D_Store::status($dir, [
             'kind' => $kind, 'state' => 'queued', 'step' => 'Wartet auf die KI', 'created' => time(),
             'user' => get_current_user_id(),
@@ -150,9 +162,9 @@ class DM3D_Rest
         // Weiterlaufen, auch wenn der Browser oder ein Proxy die Verbindung vorher trennt.
         ignore_user_abort(true);
         if (function_exists('set_time_limit')) {
-            @set_time_limit(360);
+            @set_time_limit(($status['kind'] ?? '') === 'apartment' ? 620 : 360);
         }
-        DM3D_Store::status($dir, ['state' => 'analyzing', 'step' => 'KI analysiert den Raum']);
+        DM3D_Store::status($dir, ['state' => 'analyzing', 'step' => ($status['kind'] ?? '') === 'apartment' ? 'KI liest den Grundriss und baut die Wohnung' : 'KI analysiert den Raum']);
         try {
             $input = DM3D_Store::read($dir, 'input.json') ?: [];
             $analysis = DM3D_Claude::analyze($input, (string) ($status['kind'] ?? 'video'), (string) ($input['hint'] ?? ''));

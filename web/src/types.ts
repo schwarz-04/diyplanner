@@ -136,7 +136,7 @@ export interface Project {
   /** Version 1: ein Raum (Scene), Version 2: Wohnung (Home). */
   scene: Scene | Home | null;
   /** Rohantwort der KI, solange daraus noch keine Szene gebaut wurde. */
-  analysis?: import('./analysis').RoomAnalysis | null;
+  analysis?: import('./analysis').RoomAnalysis | import('./analysis').ApartmentAnalysis | null;
 }
 
 export interface Catalog {

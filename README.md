@@ -129,3 +129,7 @@ Tabelle mit `Kategorie = Verbindungen` und den Spalten `Unterkategorie; Produktn
 ### Farben (ab 0.17.0)
 
 Tabelle mit `Kategorie = Farbe` und den Spalten `Unterkategorie; Produktname; Hersteller; Farbton; Farbcode; Produktlink; Bild-URL` importieren. Jeder Farbton wird ein eigener Eintrag („Produktname – Farbton“). Im Menü „Farbe“ erscheinen je nach Auswahl die passenden Farben: Wände und Decke bekommen Wandfarben und Kreidefarben für Wände, Möbel und Bauteile bekommen Lacke, Kreidelacke und Renovierfarben, Paneele beides. Zeilen ohne Farbcode (Grundierung, Klarlack) stehen unter „Dazu passend“. Die Einkaufsliste rechnet aus der gestrichenen Fläche die Zahl der Gebinde (2 Anstriche, ca. 10 m² je Liter).
+
+### Ganze Wohnung (ab 0.18.0)
+
+Der Planer startet mit der Wohnung: Neue Projekte entstehen aus einem Grundriss (Bild oder PDF), Fotos und Videos sind optional und liefern nur Möbel, Farben und Böden (Maße kommen aus dem Plan). Die KI liefert alle Räume mit ihrer Lage im gemeinsamen Grundriss (`shared/apartment-analysis.schema.json`, Prompt `shared/apartment-prompt.txt`). Ohne Grundriss geht weiterhin ein einzelner Raum aus Video oder Fotos. Im Editor zeigt die Leiste unten „Ganze Wohnung“ und alle Räume; ein Klick auf einen Raum blendet die anderen aus. Demo und Startseite nutzen die Demo-Wohnung (`shared/demo-home.json`).

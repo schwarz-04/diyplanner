@@ -41,7 +41,7 @@ export class Api {
   }
 
   demoScene() {
-    return this.request<Scene>('/api/demo-scene');
+    return this.request<Scene | Home>('/api/demo-scene');
   }
 
   health() {
