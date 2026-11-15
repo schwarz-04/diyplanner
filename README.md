@@ -125,3 +125,7 @@ Optional zeigt `data-render="bild.jpg"` ein vorab gerendertes Bild beim Klick au
 ### Verbindungen (ab 0.16.0)
 
 Tabelle mit `Kategorie = Verbindungen` und den Spalten `Unterkategorie; Produktname; Art/Typ; Länge; Durchmesser; Material/Oberfläche; Farbe/Finish; Inhalt (Stückzahl); Produktlink; Bild-URL` (Semikolon, Komma oder Tab) unter „Raumplaner-Produkte → Tabelle importieren“ hochladen. Die Produkte erscheinen im Menü „Verbindungen“, gruppiert nach Unterkategorie, mit Auswahl nach Art, Länge und Durchmesser. Für die vom Programm berechneten Schrauben wird in der Materialliste das passende Produkt (gleicher Durchmesser, gleiche oder nächstkürzere Länge) verlinkt.
+
+### Farben (ab 0.17.0)
+
+Tabelle mit `Kategorie = Farbe` und den Spalten `Unterkategorie; Produktname; Hersteller; Farbton; Farbcode; Produktlink; Bild-URL` importieren. Jeder Farbton wird ein eigener Eintrag („Produktname – Farbton“). Im Menü „Farbe“ erscheinen je nach Auswahl die passenden Farben: Wände und Decke bekommen Wandfarben und Kreidefarben für Wände, Möbel und Bauteile bekommen Lacke, Kreidelacke und Renovierfarben, Paneele beides. Zeilen ohne Farbcode (Grundierung, Klarlack) stehen unter „Dazu passend“. Die Einkaufsliste rechnet aus der gestrichenen Fläche die Zahl der Gebinde (2 Anstriche, ca. 10 m² je Liter).

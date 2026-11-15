@@ -24,11 +24,15 @@ export interface Panel {
   height: number;
   bottom: number;
   color: string;
+  /** Farbe aus dem Shop (Wandfarbe, Lack …), Farbton in variant */
+  paint?: Product;
 }
 
 export interface Wall {
   id: string;
   color: string;
+  /** Farbe aus dem Shop (Wandfarbe, Lack …), Farbton in variant */
+  paint?: Product;
   thickness: number;
   openings: Opening[];
   panels: Panel[];
@@ -61,6 +65,8 @@ export interface SceneObject {
   rotation: number;
   size: [number, number, number];
   color: string;
+  /** Farbe aus dem Shop (Wandfarbe, Lack …), Farbton in variant */
+  paint?: Product;
   product?: Product | null;
   /** Aus der Einkaufsliste genommen (z. B. schon vorhanden) */
   skipShop?: boolean;
@@ -73,6 +79,8 @@ export interface SceneObject {
 export interface Surface {
   material: string;
   color: string;
+  /** Farbe aus dem Shop (Wandfarbe, Lack …), Farbton in variant */
+  paint?: Product;
 }
 
 export interface Scene {
@@ -105,6 +113,8 @@ export interface Home {
   rooms: PlacedRoom[];
   /** Selbst gebaute Möbel (DIY-Bereich) */
   builds?: DiyBuild[];
+  /** Farben, die aus der Einkaufsliste genommen wurden (Produktlink|Farbton) */
+  skipPaints?: string[];
 }
 
 /** Bauplan eines DIY-Möbels: die Teile liegen als Objekte in einer Werkbank-Szene. */
@@ -156,10 +166,14 @@ export interface ShopProduct {
   color: string;
   variants?: ProductVariant[];
   /** Bereich im Möbel-Menü (Spalte Kategorie der Produkttabelle) */
-  group?: 'regale' | 'moebel' | 'deko' | 'werkzeug' | 'verbindung';
+  group?: 'regale' | 'moebel' | 'deko' | 'werkzeug' | 'verbindung' | 'farbe';
+  /** Farben: Unterkategorie, Hersteller, Farbton, Farbcode */
+  paint?: PaintInfo;
   /** Verbindungen (Schrauben, Winkel, Scharniere …): Angaben aus der Produkttabelle */
   conn?: ConnInfo;
 }
+
+export interface PaintInfo { sub: string; maker: string; shade: string; hex: string; /** Produktname ohne Farbton */ product?: string }
 
 export interface ConnInfo {
   sub: string;

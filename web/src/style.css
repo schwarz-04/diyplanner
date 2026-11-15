@@ -659,3 +659,15 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-matlink:hover { text-decoration: underline; }
 .dm-app .dm-hwrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .dm-app .dm-stepper { display: inline-flex; gap: 2px; flex: none; }
+
+/* Farben aus dem Shop */
+.dm-app .dm-paints { grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); }
+.dm-app .dm-swatch.dm-paint { position: relative; aspect-ratio: auto; width: auto; height: 46px; border-radius: 10px; display: flex; align-items: flex-end; overflow: hidden; }
+.dm-app .dm-swatch.dm-paint span {
+  width: 100%; padding: 2px 4px; font-size: 9.5px; line-height: 1.15; color: var(--dm-text); text-align: left;
+  background: color-mix(in srgb, var(--dm-surface) 82%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dm-app .dm-paintcard { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--dm-border); border-radius: 12px; background: var(--dm-surface); margin-bottom: 6px; }
+.dm-app .dm-paintcard .dm-favlink { flex: 1; min-width: 0; }
+.dm-app .dm-paintchip { width: 28px; height: 28px; border-radius: 8px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+.dm-app .dm-paintname { color: var(--dm-text); font-weight: 600; margin: 0 4px; }

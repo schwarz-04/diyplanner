@@ -95,6 +95,8 @@ export class App {
   private toolProducts: ShopProduct[] = [];
   /** Verbindungen aus der Produkttabelle (Schrauben, Winkel, Scharniere …) */
   private connProducts: ShopProduct[] = [];
+  /** Farben aus der Produkttabelle (Wandfarbe, Kreidefarbe, Lack …) */
+  private paintProducts: ShopProduct[] = [];
   /** Gewählte Filter und Variante je Unterkategorie im Menü „Verbindungen“ */
   private connPick: Record<string, { kind?: string; length?: string; diameter?: string; id?: string }> = {};
   private amazonTag = '';
@@ -242,7 +244,8 @@ export class App {
       // Produktliste ist optional (ältere Plugin-Versionen haben sie nicht)
       this.api.products().then((r) => {
         const all = r.products ?? [];
-        this.products = all.filter((p) => p.group !== 'werkzeug' && p.group !== 'verbindung');
+        this.products = all.filter((p) => p.group !== 'werkzeug' && p.group !== 'verbindung' && p.group !== 'farbe');
+        this.paintProducts = all.filter((p) => p.group === 'farbe');
         this.toolProducts = all.filter((p) => p.group === 'werkzeug');
         this.connProducts = all.filter((p) => p.group === 'verbindung');
         this.amazonTag = r.amazon_tag ?? '';
@@ -1190,11 +1193,18 @@ export class App {
         result);
     }
     const WOOD = ['#e8d2ad', '#d9b98c', '#c79a63', '#a9713f', '#7a5233', '#4b3524'];
-    const sw = (col: string) => h('button', { class: `dm-swatch${o.color.toLowerCase() === col ? ' active' : ''}`, style: `background:${col}`, title: col, onclick: () => this.benchEdit((x) => { x.color = col; }) });
+    const sw = (col: string) => h('button', { class: `dm-swatch${!o.paint && o.color.toLowerCase() === col ? ' active' : ''}`, style: `background:${col}`, title: col, onclick: () => this.benchEdit((x) => { x.color = col; x.paint = undefined; }) });
+    const paints = this.paintsFor('moebel');
+    const isCur = (p: ShopProduct) => o.paint?.url === p.url && (o.paint?.variant ?? '') === (p.paint?.shade ?? '');
     return h('div', { class: 'dm-benchpanel colors' },
+      paints.length ? h('span', { class: 'dm-muted small' }, 'Lack & Kreidefarbe') : '',
+      ...paints.map((p) => h('button', { class: `dm-swatch${isCur(p) ? ' active' : ''}`, style: `background:${p.paint!.hex}`,
+        title: `${p.paint!.shade} · ${p.paint!.product || p.name}${p.paint!.maker ? ` (${p.paint!.maker})` : ''}`,
+        onclick: () => this.benchEdit((x) => { x.color = p.paint!.hex; x.paint = paintRef(p); }) })),
+      o.paint ? h('span', { class: 'dm-paintname small' }, `${o.paint.variant} · ${o.paint.name}`) : '',
       h('span', { class: 'dm-muted small' }, 'Holz'), ...WOOD.map(sw),
       h('span', { class: 'dm-muted small' }, 'Lack'), ...FURNITURE_COLORS.slice(0, 12).map(sw),
-      colorInput(o.color, (hex) => this.benchEdit((x) => { x.color = hex; })));
+      colorInput(o.color, (hex) => this.benchEdit((x) => { x.color = hex; x.paint = undefined; })));
   }
 
   private materialView(mat: Materials, scene?: Scene): Child[] {
@@ -1974,40 +1984,44 @@ export class App {
   // ------------------------------------------------------------------ Farbe
 
   /** Ziel der Farbwahl: Auswahl oder (ohne Auswahl) alle Wände. */
-  private colorTarget(): { name: string; color: string; palette: string[]; apply: (c: string) => void } | null {
+  /** Was gerade eingefärbt wird. kind bestimmt, welche Farben aus dem Shop passen. paint: Shop-Farbe oder undefined (eigene Farbe). */
+  private colorTarget(): { name: string; color: string; palette: string[]; kind: PaintKind; paint?: Product; apply: (c: string, paint?: Product) => void } | null {
     const s = this.scene!;
     const sel = this.selection;
     if (sel?.kind === 'object') {
       const o = s.objects.find((x) => x.id === sel.id);
       if (!o) return null;
-      return { name: o.label || 'Möbel', color: o.color, palette: FURNITURE_COLORS,
-        apply: (c) => this.recolor(o.id, c, (n) => {
+      return { name: o.label || 'Möbel', color: o.color, palette: FURNITURE_COLORS, kind: 'moebel', paint: o.paint,
+        apply: (c, paint) => this.recolor(o.id, c, (n) => {
           const x = n.objects.find((y) => y.id === o.id)!;
           x.color = c;
+          x.paint = paint;
           if (x.product?.variants) x.product.variant = x.product.variants.find((v) => v.color.toLowerCase() === c.toLowerCase())?.name;
         }) };
     }
     if (sel?.kind === 'wall') {
       const i = wallIndex(s, sel.id);
       if (i < 0) return null;
-      return { name: `Wand ${i + 1}`, color: s.walls[i].color, palette: WALL_COLORS,
-        apply: (c) => this.recolor(sel.id, c, (n) => (n.walls[i].color = c)) };
+      return { name: `Wand ${i + 1}`, color: s.walls[i].color, palette: WALL_COLORS, kind: 'wand', paint: s.walls[i].paint,
+        apply: (c, paint) => this.recolor(sel.id, c, (n) => { n.walls[i].color = c; n.walls[i].paint = paint; }) };
     }
     if (sel?.kind === 'panel') {
       const f = findPanel(s, sel.id);
       if (!f) return null;
-      return { name: this.catalog.panels[f.panel.type]?.label ?? 'Paneel', color: f.panel.color, palette: FURNITURE_COLORS,
-        apply: (c) => this.recolor(sel.id, c, (n) => (n.walls[f.wallIndex].panels.find((x) => x.id === sel.id)!.color = c)) };
+      return { name: this.catalog.panels[f.panel.type]?.label ?? 'Paneel', color: f.panel.color, palette: FURNITURE_COLORS, kind: 'paneel', paint: f.panel.paint,
+        apply: (c, paint) => this.recolor(sel.id, c, (n) => { const x = n.walls[f.wallIndex].panels.find((y) => y.id === sel.id)!; x.color = c; x.paint = paint; }) };
     }
     if (sel?.kind === 'floor') {
-      return { name: 'Boden', color: s.floor.color, palette: FLOOR_COLORS, apply: (c) => this.recolor('floor', c, (n) => (n.floor.color = c)) };
+      return { name: 'Boden', color: s.floor.color, palette: FLOOR_COLORS, kind: 'boden', apply: (c) => this.recolor('floor', c, (n) => { n.floor.color = c; n.floor.paint = undefined; }) };
     }
     if (sel?.kind === 'ceiling') {
-      return { name: 'Decke', color: s.ceiling.color, palette: WALL_COLORS, apply: (c) => this.recolor('ceiling', c, (n) => (n.ceiling.color = c)) };
+      return { name: 'Decke', color: s.ceiling.color, palette: WALL_COLORS, kind: 'wand', paint: s.ceiling.paint,
+        apply: (c, paint) => this.recolor('ceiling', c, (n) => { n.ceiling.color = c; n.ceiling.paint = paint; }) };
     }
-    return { name: 'Alle Wände', color: s.walls[0]?.color ?? '#ffffff', palette: WALL_COLORS, apply: (c) => {
+    const same = s.walls.every((w) => w.paint?.url === s.walls[0]?.paint?.url && w.paint?.variant === s.walls[0]?.paint?.variant);
+    return { name: 'Alle Wände', color: s.walls[0]?.color ?? '#ffffff', palette: WALL_COLORS, kind: 'wand', paint: same ? s.walls[0]?.paint : undefined, apply: (c, paint) => {
       const next = clone(s);
-      for (const w of next.walls) { w.color = c; this.viewer.setColor(w.id, c); }
+      for (const w of next.walls) { w.color = c; w.paint = paint; this.viewer.setColor(w.id, c); }
       this.apply(next, false);
     } };
   }
@@ -2018,19 +2032,59 @@ export class App {
     const pick = (c: string) => { t.apply(c); this.renderMenu(); };
     const sel = this.selection;
     const obj = sel?.kind === 'object' ? this.scene!.objects.find((x) => x.id === sel.id) : undefined;
+    const own = !t.paint;
     return [
       h('p', {}, 'Farbe für ', h('strong', {}, t.name), sel ? '' : ' (oder tippe etwas im Bild an)'),
       obj && this.variantPicker(obj),
       !sel && h('div', { class: 'dm-row', style: 'margin-bottom:10px' },
         h('button', { class: 'dm-btn small', onclick: () => this.viewer.setSelection({ kind: 'floor' }, true) }, 'Boden'),
         h('button', { class: 'dm-btn small', onclick: () => this.viewer.setSelection({ kind: 'ceiling' }, true) }, 'Decke')),
+      ...this.paintPicker(t.kind, t.paint, (p) => { t.apply(p.paint!.hex, paintRef(p)); this.renderMenu(); }),
+      this.paintsFor(t.kind).length ? h('h4', {}, 'Freie Farbtöne') : '',
       h('div', { class: 'dm-swatches' }, t.palette.map((c) =>
         h('button', {
-          class: `dm-swatch${c.toLowerCase() === t.color.toLowerCase() ? ' active' : ''}`,
+          class: `dm-swatch${own && c.toLowerCase() === t.color.toLowerCase() ? ' active' : ''}`,
           style: `background:${c}`, title: c, onclick: () => pick(c),
         }))),
       field('Eigene Farbe', colorInput(t.color, pick)),
     ];
+  }
+
+  /** Farben aus dem Shop, die zu Wand, Möbel oder Paneel passen (mit Farbcode). */
+  private paintsFor(kind: PaintKind): ShopProduct[] {
+    if (kind === 'boden') return [];
+    return this.paintProducts.filter((p) => p.paint?.hex && (kind === 'paneel' || paintUse(p) === kind));
+  }
+
+  /** Shop-Farben als Farbfelder je Unterkategorie, dazu das gewählte Produkt und passendes Zubehör. */
+  private paintPicker(kind: PaintKind, current: Product | undefined, choose: (p: ShopProduct) => void): Child[] {
+    const list = this.paintsFor(kind);
+    if (!list.length) return [];
+    const subs = new Map<string, ShopProduct[]>();
+    for (const p of list) subs.set(p.paint!.sub || 'Farben', [...(subs.get(p.paint!.sub || 'Farben') ?? []), p]);
+    const isCur = (p: ShopProduct) => !!current && current.url === p.url && (current.variant ?? '') === (p.paint?.shade ?? '');
+    const cur = list.find(isCur);
+    const out: Child[] = [];
+    for (const [sub, items] of subs) {
+      out.push(h('h4', {}, sub), h('div', { class: 'dm-swatches dm-paints' }, items.map((p) => h('button', {
+        class: `dm-swatch dm-paint${isCur(p) ? ' active' : ''}`, style: `background:${p.paint!.hex}`,
+        title: `${p.paint!.shade} · ${p.paint!.product || p.name}${p.paint!.maker ? ` (${p.paint!.maker})` : ''}`, onclick: () => choose(p),
+      }, h('span', {}, p.paint!.shade)))));
+    }
+    if (cur) {
+      out.splice(0, 0, h('div', { class: 'dm-paintcard' },
+        h('span', { class: 'dm-paintchip', style: `background:${cur.paint!.hex}` }),
+        h('a', { class: 'dm-favlink', href: this.shopLink(cur.url), target: '_blank', rel: 'sponsored noopener', title: 'Im Shop ansehen (neuer Tab)' }, productImage(cur),
+          h('span', { class: 'dm-product-text' }, h('strong', {}, cur.paint!.shade),
+            h('span', { class: 'dm-muted small' }, [cur.paint!.product || cur.name, cur.paint!.maker, cur.price != null ? euro(cur.price) : ''].filter(Boolean).join(' · '))))));
+    }
+    // Grundierung, Versiegelung: ohne Farbfeld, nur als Link
+    const extras = this.paintProducts.filter((p) => !p.paint?.hex && (kind === 'paneel' || paintUse(p) === kind));
+    if (extras.length) {
+      out.push(h('details', { class: 'dm-toolset' }, h('summary', {}, `Dazu passend (${extras.length})`),
+        h('div', { class: 'dm-favs-list' }, extras.map((p) => this.toolProductRow(p, [p.paint?.sub, p.paint?.shade].filter(Boolean).join(', '))))));
+    }
+    return out;
   }
 
   // ------------------------------------------------------------------ Produkte und Einkaufsliste
@@ -2269,6 +2323,41 @@ export class App {
         groups.set(key, g);
       }
     });
+    // Farben aus dem Shop: Fläche zusammenzählen, daraus die Zahl der Eimer/Dosen (2 Anstriche, ca. 10 m² je Liter)
+    const skip = new Set(this.home?.skipPaints ?? []);
+    const hiddenPaints = new Set<string>();
+    const paints = new Map<string, { p: Product; area: number; rooms: Set<string> }>();
+    const addPaint = (paint: Product | undefined, area: number, room: string) => {
+      if (!paint?.url) return;
+      const key = `paint:${paint.url}|${paint.variant ?? ''}`;
+      if (skip.has(key)) { if (!hiddenPaints.has(key)) { hiddenPaints.add(key); hidden++; } return; }
+      const g = paints.get(key) ?? { p: paint, area: 0, rooms: new Set<string>() };
+      g.area += Math.max(0, area);
+      g.rooms.add(room);
+      paints.set(key, g);
+    };
+    const box = (sz: number[]) => 2 * (sz[0] * sz[2] + sz[1] * sz[2]) + sz[0] * sz[1];
+    (this.home?.rooms ?? []).forEach((r, i) => {
+      const sc = r.scene;
+      const room = sc.room.name || `Raum ${i + 1}`;
+      const poly = sc.room.polygon;
+      sc.walls.forEach((w, k) => {
+        const a = poly[k], b = poly[(k + 1) % poly.length];
+        const len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+        addPaint(w.paint, len * sc.room.height - w.openings.reduce((sum, o) => sum + o.width * o.height, 0), room);
+        for (const pn of w.panels) addPaint(pn.paint, (pn.width ?? len) * pn.height, room);
+      });
+      addPaint(sc.ceiling.paint, polygonArea(poly), room);
+      for (const o of sc.objects.flatMap((x) => (x.parts?.length ? [x, ...x.parts] : [x]))) addPaint(o.paint, box(o.size), room);
+    });
+    for (const [key, g] of paints) {
+      const liters = (g.area * 2) / 10;
+      const can = canLiters(g.p.name);
+      const count = can ? Math.max(1, Math.ceil(liters / can)) : 1;
+      const label = g.p.variant ? `${g.p.variant} – ${g.p.name}` : g.p.name;
+      groups.set(key, { key, p: g.p, label, count, rooms: g.rooms,
+        note: `für ca. ${String(Math.round(g.area * 10) / 10).replace('.', ',')} m², 2 Anstriche${can ? ` ≈ ${String(Math.round(liters * 10) / 10).replace('.', ',')} l` : ''}` });
+    }
     const rows = [...groups.values()];
     const priced = rows.filter((g) => g.p.price != null);
     const total = priced.reduce((sum, g) => sum + (g.p.price ?? 0) * g.count, 0);
@@ -2279,7 +2368,7 @@ export class App {
     const { rows, total, missing } = this.shopRows();
     this.printList('shop', rows.map((g) => ({
       name: g.label, url: g.p.url, image: g.p.image, source: g.p.source, price: g.p.price, count: g.count,
-      variant: g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '', rooms: [...g.rooms].join(', '),
+      variant: g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '', rooms: [[...g.rooms].join(', '), g.note].filter(Boolean).join(' · '),
     })), total, missing);
   }
 
@@ -2305,7 +2394,7 @@ export class App {
                 h('strong', {}, (g.count > 1 ? `${g.count} × ` : '') + g.label),
                 h('span', { class: 'dm-muted small' }, [
                   SHOP_LABEL[g.p.source], g.p.variant && (g.p.variants?.length ?? 0) > 1 ? g.p.variant : '',
-                  g.p.price != null ? euro(g.p.price * g.count) : 'Preis im Shop', [...g.rooms].join(', '),
+                  g.p.price != null ? euro(g.p.price * g.count) : 'Preis im Shop', [...g.rooms].join(', '), g.note ?? '',
                 ].filter(Boolean).join(' · ')))),
             h('button', { class: 'dm-btn small ghost', title: 'Aus der Einkaufsliste nehmen (bleibt im Raum)', onclick: () => this.setSkipShop(g.key, true) }, '✕'))))
           : h('p', { class: 'dm-muted small' }, this.inDiy
@@ -2328,6 +2417,8 @@ export class App {
   private setSkipShop(key: string | null, skip: boolean): void {
     if (!this.home) return;
     const next: Home = structuredClone(this.home);
+    if (key === null) next.skipPaints = undefined;
+    else if (key.startsWith('paint:')) next.skipPaints = skip ? [...new Set([...(next.skipPaints ?? []), key])] : (next.skipPaints ?? []).filter((k) => k !== key);
     for (const r of next.rooms) for (const o of r.scene.objects) {
       if (!o.product?.url) continue;
       if (key === null || `${o.product.url}|${o.product.variant ?? ''}` === key) o.skipShop = skip || undefined;
@@ -2710,6 +2801,38 @@ export class App {
 
 // ------------------------------------------------------------------ Formular-Bausteine
 
+type PaintKind = 'wand' | 'moebel' | 'paneel' | 'boden';
+
+/** Wofür eine Shop-Farbe gedacht ist: Wand (Wandfarbe, Kreidefarbe für Wände, Tiefgrund) oder Möbel (Lack, Renovierfarbe …). */
+function paintUse(p: ShopProduct): 'wand' | 'moebel' {
+  const sub = (p.paint?.sub ?? '').toLowerCase();
+  const name = p.name.toLowerCase();
+  if (/wand/.test(sub)) return 'wand';
+  if (/renovier|lack|möbel|holz/.test(sub)) return 'moebel';
+  if (/lack|möbel|tür|küche|holz|versiegel|wachs|klar/.test(name)) return 'moebel';
+  if (/grundierung|schutz/.test(sub) && !/tiefgrund|wand/.test(name)) return 'moebel';
+  return 'wand';
+}
+
+/** Gewählte Shop-Farbe, wie sie im Projekt gespeichert wird (Farbton als Variante). */
+function paintRef(p: ShopProduct): Product {
+  return { source: p.source, name: p.paint?.product || p.name, url: p.url, sku: '', image: p.image, price: p.price, catalog_id: p.id, variant: p.paint?.shade };
+}
+
+/** Gebindegröße in Litern aus dem Produktnamen („2,5 l“, „750 ml“), sonst null. */
+function polygonArea(poly: [number, number][]): number {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) { const [x1, y1] = poly[i], [x2, y2] = poly[(i + 1) % poly.length]; a += x1 * y2 - x2 * y1; }
+  return Math.abs(a) / 2;
+}
+
+function canLiters(name: string): number | null {
+  const m = /(\d+(?:[.,]\d+)?)\s*(ml|l)\b/i.exec(name);
+  if (!m) return null;
+  const v = parseFloat(m[1].replace(',', '.'));
+  return m[2].toLowerCase() === 'ml' ? v / 1000 : v;
+}
+
 const WALL_COLORS = ['#efede8', '#f5efe4', '#e6dccb', '#d9cbb5', '#c9b49a', '#b8c4b0', '#9fb0a4', '#a9b8c6', '#7d8b99', '#d8b8a8', '#c98f7a', '#4a5560'];
 
 function field(label: string, input: Node): HTMLElement {
@@ -2848,7 +2971,7 @@ const euro = (v: number) => v.toLocaleString('de-DE', { style: 'currency', curre
 
 interface SheetContent { title: string; body: Child[]; actions?: Child[] }
 
-interface ShopRow { key: string; p: Product; label: string; count: number; rooms: Set<string> }
+interface ShopRow { key: string; p: Product; label: string; count: number; rooms: Set<string>; note?: string }
 
 interface PrintRow { name: string; url: string; image?: string; source: Product['source']; price?: number | null; count?: number; variant?: string; rooms?: string }
 

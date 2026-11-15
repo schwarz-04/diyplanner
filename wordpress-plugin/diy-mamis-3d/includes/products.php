@@ -92,7 +92,7 @@ class DM3D_Products
                 echo '</select><p class="description">Bestimmt die Form des 3D-Modells. Größe und Farbe kommen aus den Feldern unten.</p>';
             } elseif ($type === 'group') {
                 echo '<select name="dm3d_group" id="dm3d_group">';
-                foreach (['' => 'Automatisch (nach Art)', 'regale' => 'Regale', 'moebel' => 'Möbel', 'deko' => 'Deko', 'werkzeug' => 'Werkzeug (nicht im Raum, nur bei Werkzeugen)', 'verbindung' => 'Verbindungen (Werkbank)'] as $k => $l) {
+                foreach (['' => 'Automatisch (nach Art)', 'regale' => 'Regale', 'moebel' => 'Möbel', 'deko' => 'Deko', 'werkzeug' => 'Werkzeug (nicht im Raum, nur bei Werkzeugen)', 'verbindung' => 'Verbindungen (Werkbank)', 'farbe' => 'Farben (Menü Farbe)'] as $k => $l) {
                     printf('<option value="%s"%s>%s</option>', esc_attr($k), selected($value, $k, false), esc_html($l));
                 }
                 echo '</select>';
@@ -129,7 +129,7 @@ class DM3D_Products
             if ($type === 'url') $value = esc_url_raw(trim((string) $raw));
             elseif ($type === 'number') $value = $raw === '' ? '' : (string) max(0, (float) str_replace(',', '.', (string) $raw));
             elseif ($type === 'color') $value = sanitize_hex_color((string) $raw) ?: '';
-            elseif ($type === 'group') $value = in_array($raw, ['regale', 'moebel', 'deko', 'werkzeug', 'verbindung'], true) ? $raw : '';
+            elseif ($type === 'group') $value = in_array($raw, ['regale', 'moebel', 'deko', 'werkzeug', 'verbindung', 'farbe'], true) ? $raw : '';
             elseif ($type === 'variants') {
                 $raw = sanitize_text_field((string) $raw);
                 $list = $raw === '' ? [] : DM3D_Import::parse_variants($raw, sanitize_hex_color((string) ($_POST['dm3d_color'] ?? '')) ?: '#c9b8a0');
@@ -195,13 +195,16 @@ class DM3D_Products
         ] + ($m('group') === 'verbindung' ? ['conn' => [
             'sub' => $m('sub'), 'kind' => $m('kind'), 'length' => $m('length'), 'diameter' => $m('diameter'),
             'material' => $m('material'), 'finish' => $m('finish'), 'pack' => $m('pack'),
+        ]] : []) + ($m('group') === 'farbe' ? ['paint' => [
+            'sub' => $m('sub'), 'maker' => $m('maker'), 'shade' => $m('shade'), 'hex' => $m('hex'),
+            'product' => $m('pname'),
         ]] : []);
     }
 
     /** Bereich im Möbel-Menü: gespeichert (aus der Tabelle) oder aus dem 3D-Modell abgeleitet. */
     public static function group(string $stored, string $cat, array $cats): string
     {
-        if (in_array($stored, ['regale', 'moebel', 'deko', 'werkzeug', 'verbindung'], true)) return $stored;
+        if (in_array($stored, ['regale', 'moebel', 'deko', 'werkzeug', 'verbindung', 'farbe'], true)) return $stored;
         if (in_array($cat, ['shelf', 'wall_shelf'], true)) return 'regale';
         if (($cats[$cat]['group'] ?? '') === 'deko' || in_array($cat, ['rug', 'plant', 'lamp'], true)) return 'deko';
         return 'moebel';

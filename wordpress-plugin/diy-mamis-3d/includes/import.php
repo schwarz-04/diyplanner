@@ -31,6 +31,10 @@ class DM3D_Import
         'material' => ['material/oberfläche', 'material', 'oberfläche'],
         'finish' => ['farbe/finish', 'finish'],
         'pack' => ['inhalt', 'stückzahl', 'packungsinhalt', 'menge'],
+        // Farben (Wandfarbe, Kreidefarbe, Lack …)
+        'maker' => ['hersteller', 'marke', 'brand'],
+        'shade' => ['farbton', 'farbname'],
+        'hex' => ['farbcode', 'hex', 'farbwert', 'hex-code'],
     ];
 
     /** Deutsche Bezeichnungen -> 3D-Modell (Schlüssel aus catalog.json). Reihenfolge: spezifisch vor allgemein. */
@@ -64,6 +68,7 @@ class DM3D_Import
         'werkzeug' => 'tool', 'werkzeuge' => 'tool', 'zubehör' => 'tool', 'zubehoer' => 'tool',
         'verbindungen' => 'connector', 'verbindung' => 'connector', 'verbindungsmittel' => 'connector',
         'beschläge' => 'connector', 'beschlag' => 'connector', 'befestigung' => 'connector',
+        'farbe' => 'paint', 'farben' => 'paint', 'lack' => 'paint', 'lacke' => 'paint', 'anstrich' => 'paint',
     ];
 
     /** Farb- und Materialnamen -> Farbton. Längere Namen zuerst prüfen. */
@@ -157,20 +162,24 @@ class DM3D_Import
             $name = $get('name');
             if ($name === '') continue;
             $url = esc_url_raw($get('url'));
-            $is_conn = (self::GENERIC[self::norm($get('category'))] ?? '') === 'connector';
+            $generic = self::GENERIC[self::norm($get('category'))] ?? '';
+            $is_conn = $generic === 'connector';
+            $is_paint = $generic === 'paint';
             $category = self::category($get('category'), $name, $catalog);
-            if ($category === null && !$is_conn) {
+            if ($category === null && !$is_conn && !$is_paint) {
                 $report['warnings'][] = "Zeile $line ($name): Kein passendes 3D-Modell gefunden, als einfacher Quader dargestellt.";
                 $category = 'box';
             }
-            if ($is_conn) $category = 'box';
+            if ($is_conn || $is_paint) $category = 'box';
             // Ohne Farbvarianten: Farbe aus dem Produktnamen („IVAR Schrank – Kiefer“), sonst Standardfarbe des Modells
-            $fallback = $is_conn ? '#b9bcbf' : self::color_for(self::norm($name)) ?? ($catalog[$category]['color'] ?? '#c9b8a0');
+            $fallback = $is_conn || $is_paint ? '#b9bcbf' : self::color_for(self::norm($name)) ?? ($catalog[$category]['color'] ?? '#c9b8a0');
             $variants = self::variants($get('variants'), $fallback, $unknown);
             foreach ($unknown as $u) $report['warnings'][] = "Zeile $line ($name): Farbe „{$u}“ unbekannt, bitte mit Farbcode angeben (z. B. „{$u} #a9b9a6“).";
 
-            $id = self::find($url, $name);
-            $data = ['post_type' => DM3D_Products::TYPE, 'post_title' => $name, 'post_status' => 'publish'];
+            // Farben: ein Eintrag je Farbton („Trend Wandfarbe matt 2,5 l – Cosy“), gleiche Produktnamen sind normal
+            $title = $is_paint && $get('shade') !== '' ? $name . ' – ' . $get('shade') : $name;
+            $id = self::find($url, $title);
+            $data = ['post_type' => DM3D_Products::TYPE, 'post_title' => $title, 'post_status' => 'publish'];
             if ($id) {
                 $data['ID'] = $id;
                 wp_update_post($data);
@@ -179,6 +188,24 @@ class DM3D_Import
                 $id = wp_insert_post($data);
                 if (!$id || is_wp_error($id)) continue;
                 $report['created']++;
+            }
+            if ($is_paint) {
+                // Farben: Farbton und Farbcode, kein 3D-Modell
+                $hex = '';
+                if (preg_match('/#?([0-9a-f]{6}|[0-9a-f]{3})\b/i', $get('hex'), $m)) $hex = '#' . strtolower($m[1]);
+                $shade = $get('shade');
+                $paint = [
+                    'url' => $url, 'image' => esc_url_raw($get('image')), 'category' => 'box', 'group' => 'farbe',
+                    'width' => '', 'depth' => '', 'height' => '',
+                    'sub' => $get('sub') ?: 'Sonstiges', 'maker' => $get('maker'), 'shade' => $shade, 'hex' => $hex, 'pname' => $name,
+                    'color' => $hex, 'variants' => '',
+                ];
+                if (isset($map['price'])) $paint['price'] = self::number($get('price'));
+                foreach ($paint as $k => $v) update_post_meta($id, '_dm3d_' . $k, $v);
+                if ($hex === '' && $shade !== '' && !preg_match('/transparent|farblos|klar/iu', $shade)) {
+                    $report['warnings'][] = "Zeile $line ($name, $shade): kein Farbcode, wird als Zubehör ohne Farbfeld gezeigt.";
+                }
+                continue;
             }
             if ($is_conn) {
                 // Verbindungen: „30 mm“, „M6“, „40 x 40 x 40 mm“ als Text, kein 3D-Modell
