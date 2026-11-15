@@ -2620,10 +2620,10 @@ interface PrintRow { name: string; url: string; image?: string; source: Product[
 const BI = {
   add: '<path d="M12 5v14M5 12h14"/>',
   size: '<path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><path d="M8 12h8M12 8v8"/>',
-  cut: '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8.2 8.3L20 17M8.2 15.7L20 7"/>',
+  cut: '<path d="M2 14l12-7v9l-1.5-1-1.5 1-1.5-1-1.5 1-1.5-1-1.5 1-1.5-1z"/><path d="M14 6h5a2 2 0 012 2v7a2 2 0 01-2 2h-5z"/><path d="M17.5 9.5v4"/>',
   tip: '<path d="M4 20h16"/><rect x="5" y="9" width="6" height="11"/><path d="M14 16h6v4M13 9a6 6 0 016 5"/>',
-  color: '<path d="M12 3l6 8a6 6 0 11-12 0z"/>',
-  screw: '<path d="M8 4h8l-1 4H9z"/><path d="M10 8l-1 3h6l-1-3M10 11l1 9h2l1-9M9.5 14h5M10 17h4"/>',
+  color: '<path d="M18.5 3.5a2.1 2.1 0 013 3L12 16l-4-4z"/><path d="M8 12c-3 0-4 2-4 4 0 1.5-1 2.5-2 3 3 1 8 .5 8-4"/>',
+  screw: '<path d="M3 6h10v5H3z"/><path d="M13 7h3l1 1.5-1 1.5h-3"/><path d="M17 8.5h4.5"/><path d="M6 11l-1 6h5l-1-6"/><path d="M4 17h7v3H4z"/><path d="M5.5 8.5h4"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/>',
   caster: '<path d="M5 5h14M12 5v5"/><circle cx="12" cy="15" r="5"/><circle cx="12" cy="15" r="1"/>',
   plan: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/>',
