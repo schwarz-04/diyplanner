@@ -74,6 +74,12 @@ wordpress-plugin/build.sh      # erzeugt wordpress-plugin/diy-mamis-3d.zip
    PDF der Einkaufsliste. Zugeordnet werden sie über den Namen (z. B. „Akkuschrauber“, „Bohrmaschine“,
    „Leitungssucher“, „Malerkrepp“), die Stichwörter stehen in `web/src/tools.ts`.
 
+   DIY-Bereich: Über den Umschalter „Raum / DIY“ oben öffnet sich eine Werkbank. Dort baut man aus
+   Möbeln der Produktliste und Bauteilen (Holzplatten, Leisten, Rollen, Füße) ein eigenes Möbel. Teile
+   rasten Fläche an Fläche ein; das Programm setzt passende Schrauben (Größe, Anzahl, Bohrpunkte) und
+   erstellt Materialliste, Zuschnitt und Bohrplan (auch als PDF). Das fertige Möbel lässt sich als ein
+   Stück in jeden Raum stellen. Logik in `web/src/diy.ts`, gespeichert in `builds[]` der Szene.
+
    Bedienung: Am Desktop steht das Menü als Seitenleiste links, rechts der Grundriss (Möbel ziehen,
    Maße anklicken, Räume verschieben) und die Merkliste. Neue Möbel erscheinen halbtransparent und
    werden gezogen, am Bogen gedreht und mit Enter bestätigt. Unten rechts steht die Plugin-Version.

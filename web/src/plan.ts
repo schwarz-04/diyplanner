@@ -129,7 +129,7 @@ export class PlanView {
     const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0]} ${-p[1]}`).join(' ') + ' Z';
     const t = s.walls[0]?.thickness ?? 0.12;
     g.append(el('path', { d, class: 'dm-plan-floor', fill: isActive ? s.floor.color : '#efebe5', 'fill-opacity': isActive ? 0.55 : 1 }));
-    g.append(el('path', { d, class: 'dm-plan-walls', fill: 'none', stroke: isActive ? '#4a433d' : '#a69d94', 'stroke-width': t, 'stroke-linejoin': 'miter' }));
+    g.append(el('path', { d, class: 'dm-plan-walls', fill: 'none', stroke: isActive ? '#4a433d' : '#a69d94', 'stroke-width': s.diy ? 0.01 : t, 'stroke-dasharray': s.diy ? '0.05 0.05' : 'none', 'stroke-linejoin': 'miter' }));
 
     // Öffnungen
     s.walls.forEach((wall, i) => {
@@ -148,7 +148,7 @@ export class PlanView {
     const objs = [...s.objects].sort((p, q) => (p.position[2] + p.size[2]) - (q.position[2] + q.size[2]));
     for (const o of objs) g.append(this.object(r, o, isActive));
 
-    if (isActive) {
+    if (isActive && !s.diy) {
       // Maße außen an den Wänden
       const cx = pts.reduce((v, p) => v + p[0], 0) / pts.length;
       const cy = pts.reduce((v, p) => v + p[1], 0) / pts.length;

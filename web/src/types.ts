@@ -4,7 +4,8 @@ export type Category =
   | 'sofa' | 'armchair' | 'chair' | 'dining_table' | 'coffee_table' | 'side_table' | 'desk'
   | 'bed' | 'wardrobe' | 'shelf' | 'sideboard' | 'tv' | 'lamp' | 'plant' | 'rug' | 'box'
   | 'dresser' | 'nightstand' | 'pouf' | 'wall_shelf'
-  | 'cushion' | 'vase' | 'table_lamp' | 'basket' | 'picture' | 'mirror' | 'curtain' | 'pendant';
+  | 'cushion' | 'vase' | 'table_lamp' | 'basket' | 'picture' | 'mirror' | 'curtain' | 'pendant'
+  | 'board' | 'batten' | 'caster' | 'foot' | 'diy';
 
 export interface Opening {
   id: string;
@@ -63,6 +64,10 @@ export interface SceneObject {
   product?: Product | null;
   /** Aus der Einkaufsliste genommen (z. B. schon vorhanden) */
   skipShop?: boolean;
+  /** DIY-Möbel: Einzelteile, Lage relativ zur Mitte der Grundfläche (z ab Unterkante) */
+  parts?: SceneObject[];
+  /** DIY-Möbel: zugehöriger Bauplan (Home.builds[].id) */
+  diyId?: string;
 }
 
 export interface Surface {
@@ -78,6 +83,8 @@ export interface Scene {
   ceiling: Surface;
   objects: SceneObject[];
   meta: { source: string; notes: string; dimensions_confirmed: boolean };
+  /** Werkbank des DIY-Bereichs: keine Wände, keine Decke */
+  diy?: boolean;
 }
 
 /** Ein Raum der Wohnung mit seiner Lage im gemeinsamen Grundriss (Drehung in Grad, gegen den Uhrzeigersinn). */
@@ -92,6 +99,15 @@ export interface PlacedRoom {
 export interface Home {
   version: 2;
   rooms: PlacedRoom[];
+  /** Selbst gebaute Möbel (DIY-Bereich) */
+  builds?: DiyBuild[];
+}
+
+/** Bauplan eines DIY-Möbels: die Teile liegen als Objekte in einer Werkbank-Szene. */
+export interface DiyBuild {
+  id: string;
+  name: string;
+  scene: Scene;
 }
 
 export interface Project {
@@ -113,7 +129,7 @@ export interface Catalog {
   categories: Record<Category, {
     label: string; size: [number, number, number]; color: string;
     /** deko = Dekoration, sonst Möbel */
-    group?: 'deko';
+    group?: 'deko' | 'bauteil';
     /** wall: hängt an der Wand, ceiling: hängt von der Decke */
     mount?: 'wall' | 'ceiling';
     /** Standardhöhe über dem Boden (Unterkante) */

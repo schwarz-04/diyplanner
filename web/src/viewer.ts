@@ -4,6 +4,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { buildScene } from './build';
+import { buildScrews } from './diy';
 import { Measure } from './measure';
 import { WalkControls, type Blocker } from './walk';
 import { toHome, toWorld, walkStart, walkWorld } from './home';
@@ -309,6 +310,7 @@ export class Viewer {
         const size = this.sceneData?.objects.find((o) => o.id === sel.id)?.size;
         const top = Math.max(0, (this.sceneData?.room.height ?? 2.5) - (size?.[2] ?? 0));
         node.position.y = THREE.MathUtils.clamp(node.position.y, 0, top);
+        if (this.sceneData?.diy) this.snapToParts(node, sel.id);
         const rot = ((THREE.MathUtils.radToDeg(node.rotation.y) % 360) + 360) % 360;
         this.events.onObjectMoving?.(sel.id, threeToPlan(node.position), rot);
       }
@@ -316,6 +318,34 @@ export class Viewer {
     this.selectionBox?.update();
     this.measure.updateSelection();
     this.updateHandles();
+  }
+
+  /** Werkbank: Flächen des bewegten Teils rasten an den Flächen der anderen Teile ein. */
+  private snapToParts(node: THREE.Object3D, id: string): void {
+    const SNAP = 0.025;
+    node.updateWorldMatrix(true, false);
+    const a = new THREE.Box3().setFromObject(node);
+    const shift = new THREE.Vector3();
+    const best = [SNAP, SNAP, SNAP];
+    const axes = ['x', 'y', 'z'] as const;
+    for (const [otherId, other] of this.nodes) {
+      if (otherId === id || findData(other)?.dm_type !== 'object') continue;
+      const b = new THREE.Box3().setFromObject(other);
+      axes.forEach((ax, i) => {
+        const [u, v] = axes.filter((k) => k !== ax);
+        // nur wenn sich die Teile in den beiden anderen Richtungen (fast) überdecken
+        if (a.max[u] < b.min[u] - SNAP || a.min[u] > b.max[u] + SNAP || a.max[v] < b.min[v] - SNAP || a.min[v] > b.max[v] + SNAP) return;
+        for (const d of [b.max[ax] - a.min[ax], b.min[ax] - a.max[ax], b.min[ax] - a.min[ax], b.max[ax] - a.max[ax]]) {
+          if (Math.abs(d) < best[i]) { best[i] = Math.abs(d); shift[ax] = d; }
+        }
+      });
+    }
+    if (shift.lengthSq() > 0) {
+      const world = node.getWorldPosition(new THREE.Vector3()).add(shift);
+      node.position.copy(node.parent ? node.parent.worldToLocal(world) : world);
+      if (node.position.y < 0) node.position.y = 0;
+      node.updateWorldMatrix(true, false);
+    }
   }
 
   private rayFor(e: PointerEvent): THREE.Raycaster {
@@ -778,6 +808,12 @@ export class Viewer {
     if (this.home) {
       this.home = { ...this.home, rooms: this.home.rooms.map((r, i) => (i === this.active ? { ...r, scene: data } : r)) };
       this.rooms[this.active].scene = data;
+    }
+    if (data.diy && this.root) {
+      // Schrauben neu setzen, wenn Teile verschoben wurden
+      const old = this.root.getObjectByName('diy_screws');
+      if (old) { this.root.remove(old); disposeTree(old); }
+      this.root.add(buildScrews(data));
     }
     this.updateWalkWorld();
   }

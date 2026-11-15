@@ -72,6 +72,7 @@ export class Measure {
     this.data = data;
     clear(this.roomGroup);
     this.roomGroup.visible = this.showRoom;
+    if (data.diy) return; // Werkbank hat keine Wände
     const poly = data.room.polygon;
     for (let i = 0; i < poly.length; i++) {
       const a = poly[i];
@@ -130,12 +131,12 @@ export class Measure {
     const top = box.max.y;
     if (this.selSize) {
       const [w, d, h] = this.selSize;
-      this.selGroup.add(label(plan3(cx, cy, top + 0.18), `${Math.round(w * 100)} × ${Math.round(d * 100)} × ${Math.round(h * 100)} cm`, 'object'));
+      this.selGroup.add(label(plan3(cx, cy, top + 0.18), `${c1(w)} × ${c1(d)} × ${c1(h)} cm`, 'object'));
     }
     // Abstände zu den Wänden in den vier Richtungen des Grundrisses
     const poly = this.data.room.polygon;
     const z = Math.min(0.03, top);
-    const rays: [number, number, number, number][] = [
+    const rays: [number, number, number, number][] = this.data.diy ? [] : [
       [maxX, cy, 1, 0], [minX, cy, -1, 0], [cx, maxY, 0, 1], [cx, minY, 0, -1],
     ];
     for (const [ox, oy, dx, dy] of rays) {
@@ -352,4 +353,10 @@ function castToWalls(poly: [number, number][], ox: number, oy: number, dx: numbe
     if (t > -1e-6 && u >= -1e-6 && u <= 1 + 1e-6 && (best === null || t < best)) best = t;
   }
   return best;
+}
+
+/** cm mit einer Nachkommastelle, wenn nötig (Plattenstärken) */
+function c1(m: number): string {
+  const v = Math.round(m * 1000) / 10;
+  return (v >= 10 || Number.isInteger(v) ? String(Math.round(v)) : v.toFixed(1)).replace('.', ',');
 }

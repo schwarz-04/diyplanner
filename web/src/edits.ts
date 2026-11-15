@@ -83,12 +83,12 @@ export function newObject(scene: Scene, catalog: Catalog, category: Category, op
   const size = [...(opt.size ?? c.size)] as [number, number, number];
   const H = scene.room.height;
   let [x, y] = roomCenter(scene);
-  let z = c.z ?? 0;
+  let z = scene.diy ? 0 : c.z ?? 0;
   let rotation = 0;
   if (c.mount === 'ceiling') {
     size[2] = Math.min(size[2], H - 0.3);
     z = H - size[2];
-  } else if (c.mount === 'wall') {
+  } else if (c.mount === 'wall' && scene.walls.length) {
     let i = opt.wall ?? -1;
     if (i < 0 || i >= scene.walls.length) {
       const lengths = scene.walls.map((_, k) => wallLength(scene, k));
@@ -143,5 +143,6 @@ export function findPanel(scene: Scene, id: string) {
   return null;
 }
 
-export const cm = (m: number) => Math.round(m * 100);
+/** Meter -> cm, auf Millimeter genau (Plattenstärken) */
+export const cm = (m: number) => Math.round(m * 1000) / 10;
 export const m = (cmValue: number) => cmValue / 100;

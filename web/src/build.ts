@@ -9,6 +9,7 @@
  * einzelne Elemente umfärben kann.
  */
 import * as THREE from 'three';
+import { buildScrews } from './diy';
 import type { Panel, Scene, SceneObject, Wall } from './types';
 
 const planToThree = (x: number, y: number, z = 0) => new THREE.Vector3(x, z, -y);
@@ -53,9 +54,9 @@ type Shared = ReturnType<typeof sharedMaterials>;
 
 /** Sammelt Quader, Zylinder und Kugeln (im z-oben-System) je Materialindex. */
 class Geo {
-  private parts: THREE.BufferGeometry[][] = [];
+  parts: THREE.BufferGeometry[][] = [];
 
-  private push(g: THREE.BufferGeometry, m: number): void {
+  push(g: THREE.BufferGeometry, m: number): void {
     const ng = g.index ? g.toNonIndexed() : g;
     ng.deleteAttribute('uv');
     (this.parts[m] ??= []).push(ng);
@@ -121,6 +122,7 @@ function floorAndCeiling(scene: Scene, root: THREE.Group): void {
     { kind: 'ceiling', z: scene.room.height, surf: scene.ceiling, rough: 0.9 },
   ] as const;
   for (const s of surfaces) {
+    if (scene.diy && s.kind === 'ceiling') continue;
     const g = new THREE.ShapeGeometry(shape);
     g.translate(0, 0, s.z);
     g.rotateX(-Math.PI / 2);
@@ -458,7 +460,22 @@ const dresser: Builder = (g, w, d, h) => {
 const rug: Builder = (g, w, d, h) => g.box(-w / 2, w / 2, -d / 2, d / 2, 0, Math.max(h, 0.01));
 const box: Builder = (g, w, d, h) => g.box(-w / 2, w / 2, -d / 2, d / 2, 0, h);
 
+/** Möbelrolle: Platte oben (wird angeschraubt), Gabel und Rad. */
+const caster: Builder = (g, w, d, h) => {
+  const r = Math.min(w, d, h * 0.8) / 2;
+  g.box(-w / 2, w / 2, -d / 2, d / 2, h - 0.004, h, ACCENT);
+  g.box(-0.004 - r * 0.45, -r * 0.45, -r * 0.5, r * 0.5, r, h - 0.004, ACCENT);
+  g.box(r * 0.45, r * 0.45 + 0.004, -r * 0.5, r * 0.5, r, h - 0.004, ACCENT);
+  g.sphere(0, 0, r, r * 0.4, r, r);
+};
+
+const foot: Builder = (g, w, d, h) => g.cylinder(0, 0, 0, h, Math.min(w, d) * 0.35, Math.min(w, d) / 2);
+
 const FURNITURE: Record<string, Builder> = {
+  board: box,
+  batten: box,
+  caster,
+  foot,
   sofa,
   armchair: sofa,
   chair,
@@ -493,9 +510,28 @@ const FURNITURE: Record<string, Builder> = {
 export function buildObject(o: SceneObject, sh: Shared = sharedMaterials()): THREE.Mesh {
   const [w, d, h] = o.size;
   const g = new Geo();
-  (FURNITURE[o.category] ?? box)(g, w, d, h);
-  const mesh = meshNode(`${o.category}_${o.id}`, g,
-    [mat(`${o.id}_main`, o.color, { roughness: 0.75 }), sh.accent, sh.light, sh.green, sh.ceramic, sh.mirror, sh.print],
+  const shared = [sh.accent, sh.light, sh.green, sh.ceramic, sh.mirror, sh.print];
+  const mats: THREE.Material[] = [mat(`${o.id}_main`, o.color, { roughness: 0.75 }), ...shared];
+  if (o.parts?.length) {
+    // DIY-Möbel: alle Teile in ein Netz, jedes Teil mit eigener Hauptfarbe
+    o.parts.forEach((p, k) => {
+      const pg = new Geo();
+      (FURNITURE[p.category] ?? box)(pg, p.size[0], p.size[1], p.size[2]);
+      const base = (k + 1) * 7;
+      mats[base] = mat(`${o.id}_part${k}`, p.color, { roughness: 0.75 });
+      shared.forEach((m, i) => { mats[base + 1 + i] = m; });
+      pg.parts.forEach((list, m) => {
+        for (const geo of list ?? []) {
+          geo.rotateZ(THREE.MathUtils.degToRad(p.rotation));
+          geo.translate(p.position[0], p.position[1], p.position[2]);
+          g.push(geo, base + m);
+        }
+      });
+    });
+  } else {
+    (FURNITURE[o.category] ?? box)(g, w, d, h);
+  }
+  const mesh = meshNode(`${o.category}_${o.id}`, g, mats,
     { dm_id: o.id, dm_type: 'object', dm_category: o.category, dm_label: o.label });
   mesh.position.copy(planToThree(o.position[0], o.position[1], o.position[2]));
   mesh.rotation.y = THREE.MathUtils.degToRad(o.rotation);
@@ -511,5 +547,6 @@ export function buildScene(scene: Scene): THREE.Group {
   floorAndCeiling(scene, root);
   walls(scene, root, sh);
   for (const o of scene.objects) root.add(buildObject(o, sh));
+  if (scene.diy) root.add(buildScrews(scene));
   return root;
 }

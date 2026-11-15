@@ -576,3 +576,11 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-guide > summary { cursor: pointer; color: var(--dm-accent); font-weight: 600; font-size: 12px; }
 .dm-app .dm-guide ol { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .dm-app .dm-toolset.current > summary { color: var(--dm-accent); }
+
+/* v0.13: DIY-Bereich */
+.dm-app .dm-mode { margin: 0 0 0 12px; padding: 3px; }
+.dm-app .dm-mode .dm-tab { padding: 4px 14px; font-weight: 600; }
+.dm-app .dm-matlist { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.dm-app.dm-diy .dm-dock-home { order: 0; }
+.dm-app .dm-sheet-body h4 { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dm-muted); }
+.dm-app .dm-sheet-body h4.dm-diyhead { color: var(--dm-accent); margin-top: 12px; }
