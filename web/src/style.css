@@ -578,9 +578,64 @@ html.dm3d-dark:has(body.dm3d-vollbild), body.dm3d-vollbild:has(.dm-dark) { backg
 .dm-app .dm-toolset.current > summary { color: var(--dm-accent); }
 
 /* v0.13: DIY-Bereich */
-.dm-app .dm-mode { margin: 0 0 0 12px; padding: 3px; }
-.dm-app .dm-mode .dm-tab { padding: 4px 14px; font-weight: 600; }
 .dm-app .dm-matlist { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
 .dm-app.dm-diy .dm-dock-home { order: 0; }
 .dm-app .dm-sheet-body h4 { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dm-muted); }
 .dm-app .dm-sheet-body h4.dm-diyhead { color: var(--dm-accent); margin-top: 12px; }
+
+/* v0.14: Umschalter Raumplaner / Virtuelle Werkbank, Werkbank-Leiste */
+.dm-app .dm-modebar {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; gap: 4px; padding: 4px;
+  background: var(--dm-glass); backdrop-filter: blur(10px); border: 1px solid var(--dm-border); border-radius: 999px; box-shadow: 0 6px 20px rgba(0,0,0,.14);
+}
+.dm-app .dm-modebtn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 20px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--dm-text); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.dm-app .dm-modebtn .dm-icon { width: 19px; height: 19px; }
+.dm-app .dm-modebtn:hover { background: var(--dm-soft); }
+.dm-app .dm-modebtn.active { background: var(--dm-accent); color: #fff; box-shadow: 0 2px 8px rgba(194,83,122,.35); }
+.dm-app .dm-modebtn .dm-short { display: none; }
+.dm-app .dm-floating { top: 70px; }
+.dm-app:has(.dm-overlay:not([hidden])) .dm-modebar, .dm-app:has(.dm-overlay:not([hidden])) .dm-bench { display: none; }
+.dm-app.dm-diy .dm-plan { display: none !important; }
+
+.dm-app .dm-bench {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 6; max-width: calc(100% - 24px);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.dm-app .dm-bench[hidden] { display: none; }
+.dm-app .dm-benchbar {
+  display: flex; align-items: stretch; gap: 2px; padding: 5px; max-width: 100%; overflow-x: auto; scrollbar-width: none;
+  background: var(--dm-glass); backdrop-filter: blur(10px); border: 1px solid var(--dm-border); border-radius: 14px; box-shadow: 0 8px 26px rgba(0,0,0,.18);
+}
+.dm-app .dm-benchbar .dm-sep { width: 1px; background: var(--dm-border); margin: 6px 4px; flex: none; }
+.dm-app .dm-benchbtn {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 62px; padding: 7px 8px 5px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--dm-text); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; flex: none;
+}
+.dm-app .dm-benchbtn .dm-icon { width: 22px; height: 22px; }
+.dm-app .dm-benchbtn:hover:not(:disabled) { background: var(--dm-soft); }
+.dm-app .dm-benchbtn.active { background: var(--dm-accent-soft); color: var(--dm-accent); }
+.dm-app .dm-benchbtn:disabled { opacity: .35; cursor: default; }
+.dm-app .dm-benchpanel {
+  display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 8px 12px; max-width: 100%;
+  background: var(--dm-glass); backdrop-filter: blur(10px); border: 1px solid var(--dm-border); border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.14); font-size: 13px;
+}
+.dm-app .dm-benchpanel.info, .dm-app .dm-benchpanel.hint { align-items: center; padding: 6px 14px; border-radius: 999px; }
+.dm-app .dm-benchpanel.hint { border-color: var(--dm-accent); }
+.dm-app .dm-benchpanel .dm-field { margin: 0; gap: 2px; }
+.dm-app .dm-benchpanel .dm-field .dm-input { width: 78px; padding: 5px 6px; }
+.dm-app .dm-benchpanel .dm-field select.dm-input { width: 150px; }
+.dm-app .dm-benchpanel.colors { align-items: center; gap: 5px; }
+.dm-app .dm-benchpanel .dm-swatch { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--dm-border-strong); cursor: pointer; padding: 0; }
+.dm-app .dm-benchpanel .dm-swatch.active { outline: 2px solid var(--dm-accent); outline-offset: 2px; }
+.dm-app.dm-diy.dm-wide .dm-zoom { bottom: 26px; }
+@media (max-width: 760px) {
+  .dm-app .dm-modebtn { padding: 7px 12px; font-size: 13px; }
+  .dm-app .dm-modebtn .dm-long { display: none; }
+  .dm-app .dm-modebtn .dm-short { display: inline; }
+  .dm-app:not(.dm-wide) .dm-zoom { top: 60px; }
+  .dm-app:not(.dm-wide) .dm-bench { bottom: 84px; }
+  .dm-app .dm-benchbtn { min-width: 54px; }
+}

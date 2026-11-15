@@ -110,11 +110,13 @@ function along(len: number, inset: number, step: number): number[] {
 }
 
 /** Alle Stellen, an denen zwei Teile flächig aneinander liegen, mit passenden Schrauben. */
-export function joints(objects: SceneObject[]): Joint[] {
+export function joints(objects: SceneObject[], off: string[] = []): Joint[] {
   const out: Joint[] = [];
+  const skip = new Set(off);
   const boxes = objects.map(partBox);
   for (let i = 0; i < objects.length; i++) {
     for (let j = i + 1; j < objects.length; j++) {
+      if (skip.has(jointKey(objects[i].id, objects[j].id))) continue;
       const A = boxes[i], B = boxes[j];
       for (const axis of [0, 1, 2] as const) {
         // A unter/neben B (dir +1) oder umgekehrt
@@ -220,7 +222,7 @@ export function buildScrews(scene: Scene): THREE.Group {
   group.name = 'diy_screws';
   const head = new THREE.MeshStandardMaterial({ color: '#c0396b', roughness: 0.4, metalness: 0.3 });
   const shaft = new THREE.MeshStandardMaterial({ color: '#8d8d8d', roughness: 0.4, metalness: 0.8 });
-  for (const j of joints(scene.objects)) {
+  for (const j of joints(scene.objects, scene.diyOff)) {
     for (const s of j.screws) {
       const axisVec = new THREE.Vector3(s.axis === 0 ? 1 : 0, s.axis === 2 ? 1 : 0, s.axis === 1 ? -1 : 0).multiplyScalar(s.dir);
       const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axisVec);
@@ -292,7 +294,7 @@ export function materials(scene: Scene, catalog: Catalog): Materials {
       add(furniture, label, `${cm(o.size[0])} × ${cm(o.size[1])} × ${cm(o.size[2])} cm`);
     }
   }
-  const js = joints(scene.objects);
+  const js = joints(scene.objects, scene.diyOff);
   const screws = new Map<string, ScrewRow>();
   for (const j of js) {
     const label = `Spanplattenschraube ${String(j.dia).replace('.', ',')} × ${j.len} mm`;
@@ -357,4 +359,76 @@ export function withCasters(scene: Scene, label: string, size: [number, number, 
     next.objects.push({ id: uid('obj'), category: 'caster', label, position: [x, y, 0], rotation: 0, size: [...size], color: '#4a4a4a', product: null });
   }
   return next;
+}
+
+export const jointKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+/** Standardwerte der Bauteile, falls der Katalog der Webseite sie (noch) nicht kennt. */
+export const PART_DEFAULTS: Catalog['categories'] = {
+  board: { label: 'Holzplatte', size: [0.8, 0.4, 0.018], color: '#d9b98c', group: 'bauteil' },
+  batten: { label: 'Leiste', size: [1, 0.04, 0.02], color: '#d9b98c', group: 'bauteil' },
+  caster: { label: 'Möbelrolle', size: [0.05, 0.05, 0.07], color: '#4a4a4a', group: 'bauteil' },
+  foot: { label: 'Möbelfuß', size: [0.04, 0.04, 0.1], color: '#d9b98c', group: 'bauteil' },
+  diy: { label: 'DIY-Möbel', size: [0.8, 0.4, 0.8], color: '#d9b98c', group: 'bauteil' },
+} as Catalog['categories'];
+
+/** Richtung der Breite (0) oder Tiefe (1) eines Teils auf der Werkbank. */
+function axisDir(o: SceneObject, axis: 0 | 1): [number, number] {
+  const a = (o.rotation * Math.PI) / 180;
+  return axis === 0 ? [Math.cos(a), Math.sin(a)] : [-Math.sin(a), Math.cos(a)];
+}
+
+/** Teil entlang einer Achse kürzen; das vordere Ende bleibt, wo es ist. */
+export function cutTo(o: SceneObject, axis: 0 | 1 | 2, length: number): void {
+  const old = o.size[axis];
+  o.size[axis] = length;
+  if (axis === 2) return;
+  const d = axisDir(o, axis);
+  o.position[0] -= (d[0] * (old - length)) / 2;
+  o.position[1] -= (d[1] * (old - length)) / 2;
+}
+
+/** Teil an der Stelle `at` (vom vorderen Ende) in zwei Stücke sägen. Gibt das zweite Stück zurück. */
+export function splitAt(o: SceneObject, axis: 0 | 1 | 2, at: number): SceneObject {
+  const old = o.size[axis];
+  const rest: SceneObject = { ...structuredClone(o), id: uid('obj') };
+  cutTo(o, axis, at);
+  rest.size[axis] = old - at;
+  const gap = 0.02; // kleiner Abstand, damit man beide Stücke sieht
+  if (axis === 2) rest.position[2] = o.position[2] + at + gap;
+  else {
+    const d = axisDir(o, axis);
+    rest.position[0] = o.position[0] + d[0] * (at / 2 + gap + rest.size[axis] / 2);
+    rest.position[1] = o.position[1] + d[1] * (at / 2 + gap + rest.size[axis] / 2);
+  }
+  return rest;
+}
+
+/** Teil kippen: Breite -> Tiefe -> Höhe reihum tauschen (liegend, stehend, hochkant). */
+export function tip(o: SceneObject): void {
+  o.size = [o.size[2], o.size[0], o.size[1]];
+}
+
+/** Teil a an Teil b heranschieben, bis sich zwei Flächen berühren. false: lagen schon aneinander. */
+export function attach(a: SceneObject, b: SceneObject): boolean {
+  const A = partBox(a), B = partBox(b);
+  const gap = [0, 1, 2].map((k) => (A.min[k] > B.max[k] ? B.max[k] - A.min[k] : A.max[k] < B.min[k] ? B.min[k] - A.max[k] : 0));
+  if (gap.every((g) => Math.abs(g) < 0.0005)) {
+    const touching = [0, 1, 2].some((k) => Math.abs(A.min[k] - B.max[k]) < 0.003 || Math.abs(A.max[k] - B.min[k]) < 0.003);
+    if (touching) return false;
+    // Teile stecken ineinander: a obenauf setzen
+    a.position[2] = B.max[2];
+    return true;
+  }
+  // In der Richtung mit dem größten Abstand heranschieben, in den anderen so weit, dass sich die Flächen überdecken
+  const main = gap.map(Math.abs).indexOf(Math.max(...gap.map(Math.abs)));
+  for (let k = 0; k < 3; k++) {
+    if (k === main || gap[k] === 0) continue;
+    const size = A.max[k] - A.min[k];
+    const need = Math.min(size, B.max[k] - B.min[k], 0.02);
+    a.position[k] += gap[k] + Math.sign(gap[k]) * (k === 2 ? need : Math.min(size, need));
+  }
+  a.position[main] += gap[main];
+  if (a.position[2] < 0) a.position[2] = 0;
+  return true;
 }

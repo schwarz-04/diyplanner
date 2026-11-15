@@ -2,7 +2,7 @@ import { Api } from './api';
 import { analysisToScene, prepareInput } from './analysis';
 import { attachRoom, emptyRoom, moveRoom, replaceRoom, rotateRoom, toHome } from './home';
 import { PlanView } from './plan';
-import { composeObject, materials, newBuild, topAt, withCasters, type Joint, type Materials } from './diy';
+import { PART_DEFAULTS, attach, composeObject, cutTo, jointKey, materials, newBuild, splitAt, tip, topAt, withCasters, type Joint, type Materials } from './diy';
 import { TOOL_ORDER, TOOL_SETS, findToolProducts, type Tool as DiyTool, type ToolContext, type ToolSet } from './tools';
 import { Showcase } from './showcase';
 import { Viewer, type Tool, type ViewMode } from './viewer';
@@ -83,7 +83,11 @@ export class App {
   private mainHome: Home | null = null;
   private diyId = '';
   private roomActive = 0;
-  private elMode = h('div', { class: 'dm-tabs dm-mode needs-project' });
+  private elMode = h('div', { class: 'dm-modebar needs-project' });
+  private elBench = h('div', { class: 'dm-bench', hidden: true });
+  private benchPanel: 'size' | 'cut' | 'color' | null = null;
+  /** Verschrauben: dieses Teil wird an das nächste angeklickte Teil geschoben */
+  private attachFrom: string | null = null;
   /** Farbverlauf unten im 3D-Hintergrund (Test) */
   private gradient = (() => { try { return localStorage.getItem('dm3d_gradient') !== '0'; } catch { return true; } })();
   private products: ShopProduct[] = [];
@@ -133,8 +137,7 @@ export class App {
       h('header', { class: 'dm-top' },
         h('div', { class: 'dm-brand' },
           this.opts.backUrl ? h('a', { class: 'dm-backlink', href: this.opts.backUrl, title: 'Zurück zur Webseite' }, '← ' + (this.opts.backLabel || 'Webseite')) : null,
-          h('button', { class: 'dm-title-btn needs-project', title: 'Projekt umbenennen', onclick: () => this.showSave() }, this.elTitle),
-          this.elMode),
+          h('button', { class: 'dm-title-btn needs-project', title: 'Projekt umbenennen', onclick: () => this.showSave() }, this.elTitle)),
         h('div', { class: 'dm-actions' },
           this.btnUndo, this.btnRedo,
           h('span', { class: 'dm-sep needs-project' }),
@@ -147,7 +150,7 @@ export class App {
       ),
       h('div', { class: 'dm-main' },
         h('aside', { class: 'dm-side' }, this.elDock, this.elPop),
-        h('div', { class: 'dm-stage' }, this.elCanvas, this.elToolbar, this.elVersion,
+        h('div', { class: 'dm-stage' }, this.elCanvas, this.elMode, this.elToolbar, this.elBench, this.elVersion,
           h('div', { class: 'dm-zoom needs-project' },
             h('button', { class: 'dm-round', title: 'Hineinzoomen', onclick: () => this.viewer.zoom(0.8) }, '+'),
             h('button', { class: 'dm-round', title: 'Herauszoomen', onclick: () => this.viewer.zoom(1.25) }, '−'),
@@ -223,7 +226,7 @@ export class App {
 
     try {
       const [catalog, health] = await Promise.all([this.api.catalog(), this.api.health()]);
-      this.catalog = catalog;
+      this.catalog = { ...catalog, categories: { ...PART_DEFAULTS, ...catalog.categories } };
       this.analysisAvailable = health.analysis_available;
       this.canCreate = health.can_create ?? true;
       this.loginUrl = health.login_url ?? '';
@@ -446,7 +449,6 @@ export class App {
       rememberLocal(id);
       this.viewer.setHome(this.home, 0, false);
       this.hideOverlay();
-      if (this.wide && !this.menu) this.menu = 'furniture';
       this.select(null);
       this.setStatus('Gespeichert');
     } catch (err) {
@@ -762,6 +764,8 @@ export class App {
   private confirmPlacing(): void {
     if (!this.viewer.placingId) return;
     this.viewer.stopPlacing();
+    // Werkbank: das Teil bleibt ausgewählt, damit man es gleich bearbeiten kann
+    if (this.inDiy) { this.renderFloating(); return; }
     this.viewer.setSelection(null, true);
     this.toast('Platziert');
   }
@@ -796,9 +800,16 @@ export class App {
   private select(sel: Selection): void {
     const same = sel?.kind === 'object' && this.selection?.kind === 'object' && sel.id === this.selection.id;
     if (!same) this.furnAdd = true; // Möbel-Menü zeigt wieder den Katalog
+    if (this.attachFrom && this.inDiy && sel?.kind === 'object' && sel.id !== this.attachFrom) {
+      const from = this.attachFrom;
+      this.attachFrom = null;
+      this.selection = sel;
+      this.attachParts(from, sel.id);
+      return;
+    }
     this.selection = sel;
     // Produkt gewählt: rechts die Einkaufsliste zeigen (außer beim Speichern oder Rendern)
-    if (!same && sel?.kind === 'object' && this.wide && this.sheet !== 'save' && this.sheet !== 'render') {
+    if (!same && sel?.kind === 'object' && this.wide && !this.inDiy && this.sheet !== 'save' && this.sheet !== 'render') {
       this.sheet = 'shop';
       this.renderSheet();
     }
@@ -939,11 +950,11 @@ export class App {
     this.selection = null;
     this.root.classList.add('dm-diy');
     this.viewer.setHome(this.home, 0, false);
-    this.viewer.zoom(0.7);
-    this.menu = this.wide ? 'furniture' : null;
+    this.viewer.zoom(0.55);
+    this.menu = this.wide && !build.scene.objects.length ? 'furniture' : null;
     this.furnTab = 'bauteile';
     this.furnAdd = true;
-    this.sheet = this.wide ? 'shop' : null;
+    this.sheet = null;
     this.renderSheet();
     this.renderPanel();
     this.updateButtons();
@@ -1014,11 +1025,125 @@ export class App {
   }
 
   private renderMode(): void {
-    const btn = (diy: boolean, label: string, title: string) => h('button', {
-      class: `dm-tab${this.inDiy === diy ? ' active' : ''}`, title,
+    const btn = (diy: boolean, ic: string, label: string, short: string, title: string) => h('button', {
+      class: `dm-modebtn${this.inDiy === diy ? ' active' : ''}`, title,
       onclick: () => { if (diy !== this.inDiy) (diy ? this.enterDiy() : this.exitDiy()); },
-    }, label);
-    this.elMode.replaceChildren(btn(false, 'Raum', 'Räume einrichten'), btn(true, 'DIY', 'Eigene Möbel aus Möbeln, Platten und Rollen bauen'));
+    }, icon(ic), h('span', { class: 'dm-long' }, label), h('span', { class: 'dm-short' }, short));
+    this.elMode.replaceChildren(
+      btn(false, ICON_PLAN, 'Raumplaner', 'Raum', 'Räume einrichten und Möbel stellen'),
+      btn(true, ICON_TOOL, 'Virtuelle Werkbank', 'Werkbank', 'Eigene Möbel aus Möbeln, Platten und Rollen bauen'));
+  }
+
+  // ------------------------------------------------------------------ Werkbank-Leiste
+
+  private benchEdit(mutate: (o: SceneObject, s: Scene) => void): void {
+    const sel = this.selection;
+    if (sel?.kind !== 'object' || !this.scene) return;
+    const next = clone(this.scene);
+    const o = next.objects.find((x) => x.id === sel.id);
+    if (!o) return;
+    mutate(o, next);
+    this.apply(next, true);
+  }
+
+  /** Verschrauben: a an b heranschieben, die Schrauben setzt das Programm an der Kontaktfläche. */
+  private attachParts(fromId: string, toId: string): void {
+    const next = clone(this.scene!);
+    const a = next.objects.find((x) => x.id === fromId);
+    const b = next.objects.find((x) => x.id === toId);
+    if (!a || !b) return;
+    const key = jointKey(a.id, b.id);
+    const wasOff = next.diyOff?.includes(key);
+    next.diyOff = (next.diyOff ?? []).filter((k) => k !== key);
+    const moved = attach(a, b);
+    if (!moved && !wasOff) { this.toast('Die beiden Teile liegen schon aneinander und sind verschraubt.'); return; }
+    this.apply(next, true).then(() => {
+      this.viewer.setSelection({ kind: 'object', id: fromId }, true);
+      const n = materials(this.scene!, this.catalog).joints.filter((j) => jointKey(j.through.id, j.into.id) === key).reduce((sum, j) => sum + j.screws.length, 0);
+      this.toast(n ? `Verschraubt mit ${n} Schrauben` : 'Aneinandergesetzt. Hier ist das Material zu dünn für Schrauben.');
+    });
+  }
+
+  private renderBench(): void {
+    const s = this.scene;
+    const show = this.inDiy && !!s && !this.viewer?.placingId;
+    this.elBench.hidden = !show;
+    if (!show || !s) { this.elBench.replaceChildren(); return; }
+    const sel = this.selection;
+    const o = sel?.kind === 'object' ? s.objects.find((x) => x.id === sel.id) : undefined;
+    if (!o) this.benchPanel = null;
+    const tool = (ic: string, label: string, onclick: () => void, opt: { active?: boolean; disabled?: boolean; title?: string } = {}) => h('button', {
+      class: `dm-benchbtn${opt.active ? ' active' : ''}`, disabled: !!opt.disabled, title: opt.title ?? label, onclick,
+    }, icon(ic), h('span', {}, label));
+    const panelBtn = (id: 'size' | 'cut' | 'color', ic: string, label: string, title: string) =>
+      tool(ic, label, () => { this.benchPanel = this.benchPanel === id ? null : id; this.renderBench(); }, { active: this.benchPanel === id, disabled: !o, title });
+    const none = !o;
+    const bar = h('div', { class: 'dm-benchbar' },
+      tool(BI.add, 'Teil', () => { this.furnTab = 'bauteile'; this.furnAdd = true; this.openMenu('furniture'); }, { title: 'Bauteil oder Möbel hinzufügen' }),
+      h('span', { class: 'dm-sep' }),
+      panelBtn('size', BI.size, 'Maße', 'Breite, Tiefe, Höhe und Lage einstellen'),
+      panelBtn('cut', BI.cut, 'Zuschneiden', 'Kürzen oder in zwei Stücke sägen'),
+      tool(BI.tip, 'Kippen', () => this.benchEdit((x) => tip(x)), { disabled: none || !!o?.product?.url, title: 'Liegend, stehend, hochkant' }),
+      tool(ICON_ROTATE, 'Drehen', () => o && this.rotateBy(o.id, 90), { disabled: none, title: 'Um 90° drehen' }),
+      panelBtn('color', BI.color, 'Farbe', 'Farbe oder Holzton ändern'),
+      tool(BI.screw, 'Verschrauben', () => {
+        this.attachFrom = this.attachFrom ? null : o?.id ?? null;
+        if (this.attachFrom) this.toast('Jetzt das Teil anklicken, an das es geschraubt werden soll.');
+        this.renderBench();
+      }, { disabled: none, active: !!this.attachFrom, title: 'An ein anderes Teil setzen und verschrauben' }),
+      tool(BI.copy, 'Kopie', () => o && this.duplicateObject(o.id), { disabled: none }),
+      tool(TRASH, 'Löschen', () => o && this.deleteObject(o.id), { disabled: none }),
+      h('span', { class: 'dm-sep' }),
+      tool(BI.caster, 'Rollen', () => this.apply(withCasters(s, this.catalog.categories.caster.label), true), { disabled: !s.objects.length, title: 'Vier Möbelrollen unter die Ecken setzen' }),
+      tool(BI.plan, 'Bauplan', () => this.openMenu('diy'), { title: 'Materialliste, Schrauben und Bohrplan' }));
+    const out: Node[] = [];
+    if (this.attachFrom) {
+      out.push(h('div', { class: 'dm-benchpanel hint' }, `„${s.objects.find((x) => x.id === this.attachFrom)?.label ?? 'Teil'}“ verschrauben: Klicke das zweite Teil an.`,
+        h('button', { class: 'dm-btn small ghost', onclick: () => { this.attachFrom = null; this.renderBench(); } }, 'Abbrechen')));
+    } else if (o && this.benchPanel) {
+      out.push(this.benchPanelView(o));
+    } else if (o) {
+      const c = (v: number) => String(cm(v)).replace('.', ',');
+      out.push(h('div', { class: 'dm-benchpanel info' }, h('strong', {}, o.label || 'Teil'), ` · ${c(o.size[0])} × ${c(o.size[1])} × ${c(o.size[2])} cm`));
+    } else if (!s.objects.length) {
+      out.push(h('div', { class: 'dm-benchpanel info' }, 'Leere Werkbank. Mit „Teil“ fügst du Möbel, Holzplatten, Leisten oder Rollen hinzu.'));
+    }
+    out.push(bar);
+    this.elBench.replaceChildren(...out);
+  }
+
+  private benchPanelView(o: SceneObject): HTMLElement {
+    const c = (v: number) => cm(v);
+    if (this.benchPanel === 'size') {
+      const size = (axis: 0 | 1 | 2) => numberInput(c(o.size[axis]), 0.1, 1000, (v) => this.benchEdit((x) => { x.size[axis] = m(v); }), 'cm');
+      return h('div', { class: 'dm-benchpanel' },
+        field('Breite', size(0)), field('Tiefe', size(1)), field('Höhe', size(2)),
+        field('Über Boden', numberInput(c(o.position[2]), 0, 400, (v) => this.benchEdit((x) => { x.position[2] = m(v); }), 'cm')),
+        field('Drehung', numberInput(Math.round(o.rotation), -360, 720, (v) => this.benchEdit((x) => { x.rotation = ((v % 360) + 360) % 360; }), '°')));
+    }
+    if (this.benchPanel === 'cut') {
+      const names = ['Breite', 'Tiefe', 'Höhe'];
+      const longest = ([0, 1, 2] as const).reduce((a, b) => (o.size[b] > o.size[a] ? b : a));
+      const axisSel = h('select', { class: 'dm-input' }, ([0, 1, 2] as const).map((a) =>
+        h('option', { value: String(a), selected: a === longest }, `${names[a]} (${String(c(o.size[a])).replace('.', ',')} cm)`))) as HTMLSelectElement;
+      const len = h('input', { class: 'dm-input', type: 'number', step: 0.1, min: 0.1, placeholder: 'cm', value: '' }) as HTMLInputElement;
+      const read = (): { axis: 0 | 1 | 2; v: number } | null => {
+        const axis = Number(axisSel.value) as 0 | 1 | 2;
+        const v = m(Number(len.value));
+        if (!(v > 0.001) || v >= o.size[axis]) { this.toast(`Bitte ein Maß kleiner als ${String(c(o.size[axis])).replace('.', ',')} cm eingeben.`); return null; }
+        return { axis, v };
+      };
+      return h('div', { class: 'dm-benchpanel' },
+        field('Schnitt entlang', axisSel), field('Schnitt bei', h('span', { class: 'dm-unit' }, len, h('small', {}, 'cm'))),
+        h('button', { class: 'dm-btn small primary', title: 'Auf dieses Maß kürzen, der Rest fällt weg', onclick: () => { const r = read(); if (r) this.benchEdit((x) => cutTo(x, r.axis, r.v)); } }, 'Kürzen'),
+        h('button', { class: 'dm-btn small', title: 'In zwei Stücke sägen, beide bleiben', onclick: () => { const r = read(); if (r) this.benchEdit((x, sc) => { sc.objects.push(splitAt(x, r.axis, r.v)); }); } }, 'In zwei Teile sägen'));
+    }
+    const WOOD = ['#e8d2ad', '#d9b98c', '#c79a63', '#a9713f', '#7a5233', '#4b3524'];
+    const sw = (col: string) => h('button', { class: `dm-swatch${o.color.toLowerCase() === col ? ' active' : ''}`, style: `background:${col}`, title: col, onclick: () => this.benchEdit((x) => { x.color = col; }) });
+    return h('div', { class: 'dm-benchpanel colors' },
+      h('span', { class: 'dm-muted small' }, 'Holz'), ...WOOD.map(sw),
+      h('span', { class: 'dm-muted small' }, 'Lack'), ...FURNITURE_COLORS.slice(0, 12).map(sw),
+      colorInput(o.color, (hex) => this.benchEdit((x) => { x.color = hex; })));
   }
 
   private materialView(mat: Materials): Child[] {
@@ -1065,6 +1190,11 @@ export class App {
     if (mat.joints.length) {
       out.push(h('h4', {}, `Verbindungen (${mat.joints.length})`), ...mat.joints.map((j) => h('details', { class: 'dm-toolset' },
         h('summary', {}, this.jointLabel(j)),
+        h('button', { class: 'dm-btn small ghost', style: 'float:right', title: 'Diese beiden Teile nicht verschrauben', onclick: () => {
+          const next = clone(s);
+          next.diyOff = [...(next.diyOff ?? []), jointKey(j.through.id, j.into.id)];
+          this.apply(next, true);
+        } }, 'Lösen'),
         h('p', { class: 'dm-muted small', style: 'margin:2px 0' }, `${j.screws.length} × ${String(j.dia).replace('.', ',')} × ${j.len} mm, vorbohren ${String(j.pilot).replace('.', ',')} mm`),
         h('p', { class: 'dm-muted small', style: 'margin:2px 0' }, `Bohrpunkte auf der Kontaktfläche (${String(j.area[0]).replace('.', ',')} × ${String(j.area[1]).replace('.', ',')} cm), von der Ecke gemessen: ${j.points.map((p) => `${String(p[0]).replace('.', ',')} / ${String(p[1]).replace('.', ',')}`).join(' · ')} cm`))));
     } else if (s.objects.length > 1) {
@@ -1808,7 +1938,8 @@ export class App {
   }
 
   private inTab(tab: FurnTab): ShopProduct[] {
-    return this.products.filter((p) => (tab === 'favs' ? this.favs.has(p.id) : productGroup(p, this.catalog) === tab));
+    return this.products.filter((p) => (tab === 'favs' ? this.favs.has(p.id) : productGroup(p, this.catalog) === tab))
+      .sort((a, b) => productRank(b) - productRank(a) || a.name.localeCompare(b.name, 'de'));
   }
 
   private productList(items: ShopProduct[]): HTMLElement {
@@ -2201,6 +2332,7 @@ export class App {
   // ------------------------------------------------------------------ Leiste oben im Bild
 
   private renderFloating(): void {
+    this.renderBench();
     const sel = this.selection;
     const s = this.scene;
     this.elToolbar.replaceChildren();
@@ -2228,7 +2360,7 @@ export class App {
       this.elToolbar.hidden = false;
       return;
     }
-    if (sel && s) {
+    if (sel && s && !this.inDiy) {
       const btn = (label: string | Node, onclick: () => void, cls = '') => h('button', { class: `dm-btn small ${cls}`, onclick }, label);
       let name = '';
       const items: Child[] = [];
@@ -2484,6 +2616,19 @@ interface ShopRow { key: string; p: Product; label: string; count: number; rooms
 
 interface PrintRow { name: string; url: string; image?: string; source: Product['source']; price?: number | null; count?: number; variant?: string; rooms?: string }
 
+/** Symbole der Werkbank-Leiste */
+const BI = {
+  add: '<path d="M12 5v14M5 12h14"/>',
+  size: '<path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><path d="M8 12h8M12 8v8"/>',
+  cut: '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8.2 8.3L20 17M8.2 15.7L20 7"/>',
+  tip: '<path d="M4 20h16"/><rect x="5" y="9" width="6" height="11"/><path d="M14 16h6v4M13 9a6 6 0 016 5"/>',
+  color: '<path d="M12 3l6 8a6 6 0 11-12 0z"/>',
+  screw: '<path d="M8 4h8l-1 4H9z"/><path d="M10 8l-1 3h6l-1-3M10 11l1 9h2l1-9M9.5 14h5M10 17h4"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/>',
+  caster: '<path d="M5 5h14M12 5v5"/><circle cx="12" cy="15" r="5"/><circle cx="12" cy="15" r="1"/>',
+  plan: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/>',
+};
+
 const ICON_TOOL = '<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>';
 const ICON_PDF = '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M12 11v6M9.5 14.5L12 17l2.5-2.5"/>';
 
@@ -2532,6 +2677,23 @@ function saveFavs(favs: Map<string, FavItem>): void {
 }
 
 /** Bereich im Möbel-Menü: aus der Produkttabelle (Spalte Kategorie), sonst aus dem 3D-Modell. */
+/** Bekannte, oft verbaute Möbel zuerst, Nischenprodukte ans Ende. */
+const TOP_PRODUCTS = ['billy', 'kallax', 'vesken', 'pax', 'ivar', 'bestå', 'besta', 'eket', 'platsa', 'hemnes', 'malm', 'trofast', 'metod',
+  'småstad', 'smastad', 'brimnes', 'nordli', 'alex', 'hejne', 'bror', 'omar', 'hyllis', 'jonaxel', 'lack', 'baggebo', 'kleppstad', 'havsta', 'idanäs', 'vihals'];
+const LOW_PRODUCTS = ['gewächshaus', 'beistelltisch', 'hocker', 'tritthocker', 'servierwagen', 'zeitschriften', 'fußmatte', 'schuhlöffel'];
+
+function productRank(p: ShopProduct): number {
+  const n = p.name.toLowerCase();
+  let score = 0;
+  const top = TOP_PRODUCTS.findIndex((w) => n.includes(w));
+  if (top >= 0) score += 1000 - top * 10;
+  if (LOW_PRODUCTS.some((w) => n.includes(w))) score -= 500;
+  if (p.source === 'ikea') score += 100;
+  // größere Möbel vor Kleinteilen
+  score += Math.min(200, p.size[0] * p.size[1] * p.size[2] * 400);
+  return score;
+}
+
 function productGroup(p: ShopProduct, catalog: Catalog): 'regale' | 'moebel' | 'deko' {
   if (p.group === 'regale' || p.group === 'moebel' || p.group === 'deko') return p.group;
   if (p.category === 'shelf' || p.category === 'wall_shelf') return 'regale';

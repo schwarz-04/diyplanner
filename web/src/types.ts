@@ -85,6 +85,8 @@ export interface Scene {
   meta: { source: string; notes: string; dimensions_confirmed: boolean };
   /** Werkbank des DIY-Bereichs: keine Wände, keine Decke */
   diy?: boolean;
+  /** Werkbank: Verbindungen, die nicht verschraubt werden sollen ("idA|idB") */
+  diyOff?: string[];
 }
 
 /** Ein Raum der Wohnung mit seiner Lage im gemeinsamen Grundriss (Drehung in Grad, gegen den Uhrzeigersinn). */
