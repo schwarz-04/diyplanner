@@ -964,7 +964,7 @@ export class App {
     const main = this.fullHome();
     if (!main) return;
     if (!this.inDiy) this.roomActive = this.active;
-    if (this.viewer.viewMode === 'walk') this.viewer.setMode('orbit');
+    if (this.viewer.viewMode !== 'orbit') this.viewer.setMode('orbit'); // Werkbank nur in 3D
     let builds = main.builds ?? [];
     let build = id === 'new' ? undefined : builds.find((b) => b.id === id) ?? builds[builds.length - 1];
     if (!build) {
@@ -1447,6 +1447,12 @@ export class App {
     this.renderMenu();
   }
 
+  /** Werkbank: nur Bauplan, Möbel, Bauteile, Verbindungen, Werkzeug (Ansicht, Farbe, Entfernen stecken in der Leiste unten). */
+  private dockMenus(): { id: MenuId; label: string; icon: string }[] {
+    if (!this.inDiy) return MENUS.filter((m) => !BENCH_ONLY.has(m.id));
+    return BENCH_MENUS.map((id) => MENUS.find((m) => m.id === id)!);
+  }
+
   private renderDock(): void {
     const btn = (m: { id: MenuId; label: string; icon: string }) => h('button', {
       class: `dm-dock-btn${this.menu === m.id ? ' active' : ''}`,
@@ -1454,7 +1460,7 @@ export class App {
       onclick: () => this.toggleMenu(m.id),
     }, icon(m.icon), h('span', {}, m.label));
     this.elDock.replaceChildren(
-      ...MENUS.filter((m) => (this.inDiy ? m.id !== 'room' && m.id !== 'style' : m.id !== 'diy' && m.id !== 'parts')).map(btn),
+      ...this.dockMenus().map(btn),
       h('span', { class: 'dm-dock-spacer' }),
       h('button', { class: 'dm-dock-btn dm-dock-home', title: 'Home: alle Projekte, neues Projekt', onclick: () => this.showProjects() }, icon(ICON_HOME), h('span', {}, 'Home')),
       btn({ id: 'account', label: this.user.name ? 'Konto' : 'Konto', icon: ICON_USER }));
@@ -1552,7 +1558,7 @@ export class App {
     this.elTitle.textContent = s ? this.project?.name || (this.mainHome ?? this.home)?.rooms[0]?.scene.room.name || 'Raumplaner' : 'Raumplaner';
     this.renderMode();
     if ((this.menu === 'room' || this.menu === 'style') && this.inDiy) this.menu = 'diy';
-    if ((this.menu === 'diy' || this.menu === 'parts') && !this.inDiy) this.menu = null;
+    if (this.menu && this.menu !== 'account' && !this.dockMenus().some((m) => m.id === this.menu)) this.menu = null;
     this.root.classList.toggle('dm-empty', !s);
     this.root.classList.toggle('dm-panel-open', !!this.menu && !!s);
     this.renderPlan();
@@ -2754,13 +2760,16 @@ function saveTheme(t: Theme): void {
 
 const TRASH = '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>';
 
+const BENCH_MENUS: MenuId[] = ['diy', 'furniture', 'parts', 'conn', 'tools'];
+const BENCH_ONLY = new Set<MenuId>(['diy', 'parts']);
+
 const MENUS: { id: MenuId; label: string; icon: string }[] = [
   { id: 'diy', label: 'Bauplan', icon: '<path d="M4 20V8l8-4 8 4v12"/><path d="M4 12h16M9 20v-4h6v4"/>' },
   { id: 'view', label: 'Ansicht', icon: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>' },
   { id: 'room', label: 'Raum', icon: '<path d="M4 4h16v16H4z"/><path d="M4 13h7v7M14 4v6h6"/>' },
   { id: 'parts', label: 'Bauteile', icon: '<path d="M3 14l9-5 9 5-9 5z"/><path d="M3 14v3l9 5 9-5v-3"/><path d="M8 6.5l4-2.2 4 2.2"/>' },
-  { id: 'conn', label: 'Verbindungen', icon: '<path d="M9 3h6l-1 3h-4z"/><path d="M12 6v15"/><path d="M10 9l4 1.5M10 12l4 1.5M10 15l4 1.5M10 18l2 1"/>' },
   { id: 'furniture', label: 'Möbel', icon: '<path d="M5 11V8a2 2 0 012-2h10a2 2 0 012 2v3"/><path d="M3 12a2 2 0 014 0v2h10v-2a2 2 0 014 0v5H3z"/><path d="M5 17v2M19 17v2"/>' },
+  { id: 'conn', label: 'Verbindungen', icon: '<path d="M9 3h6l-1 3h-4z"/><path d="M12 6v15"/><path d="M10 9l4 1.5M10 12l4 1.5M10 15l4 1.5M10 18l2 1"/>' },
   { id: 'style', label: 'Style', icon: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>' },
   { id: 'color', label: 'Farbe', icon: '<path d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.8 0-1.4-1-1.9 0-2.9s3 0 4.2-1.1C20.5 14 21 13 21 11c0-4.4-4-8-9-8z"/><circle cx="7.5" cy="11.5" r="1.1"/><circle cx="10" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>' },
   { id: 'tools', label: 'Werkzeug', icon: '<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>' },
